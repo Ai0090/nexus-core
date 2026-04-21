@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TET — Founding Members</title>
+    <style>
+      :root { --bg:#05050a; --fg:#e9e9ff; --muted:#a0a0c2; --line:#24243a; --hot:#ff2bd6; --mint:#33ffcc; }
+      body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background: radial-gradient(1200px 700px at 20% 0%, rgba(255,43,214,.12), transparent 55%), radial-gradient(900px 600px at 80% 20%, rgba(51,255,204,.10), transparent 55%), var(--bg); color:var(--fg); }
+      .wrap { max-width: 1100px; margin: 0 auto; padding: 28px 18px 72px; }
+      .top { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; flex-wrap:wrap; }
+      .brand { letter-spacing:.22em; text-transform:uppercase; font-size:12px; color:var(--muted); }
+      .title { font-size: 30px; font-weight: 700; letter-spacing:.02em; margin-top: 6px; }
+      .sub { color:var(--muted); margin-top: 6px; line-height: 1.35; }
+      .card { margin-top: 18px; border:1px solid var(--line); border-radius: 16px; padding: 14px; background: rgba(255,255,255,.03); backdrop-filter: blur(6px); }
+      .grid { display:grid; grid-template-columns: 1.2fr .8fr; gap: 14px; margin-top: 14px; }
+      @media (max-width: 920px) { .grid { grid-template-columns: 1fr; } }
+      button { border:1px solid #343457; background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03)); color:var(--fg); padding:11px 14px; border-radius: 12px; letter-spacing:.14em; text-transform:uppercase; cursor:pointer; }
+      button:hover { border-color:#52528a; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+      .pill { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line); padding: 8px 10px; border-radius: 999px; background: rgba(0,0,0,.25); }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #666; }
+      .dot.ok { background: var(--mint); box-shadow: 0 0 18px rgba(51,255,204,.35); }
+      .dot.hot { background: var(--hot); box-shadow: 0 0 18px rgba(255,43,214,.35); }
+      .bal { font-size: 46px; font-weight: 750; letter-spacing:.03em; font-variant-numeric: tabular-nums; }
+      .badges { display:flex; gap:10px; flex-wrap:wrap; margin-top: 10px; color: var(--muted); }
+      .cmd { width:100%; min-height: 92px; border:1px solid #2b2b44; background:#0b0b14; color:var(--fg); padding: 10px 12px; border-radius: 12px; }
+      .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+      .hint { margin-top: 10px; color: var(--muted); font-size: 12px; line-height: 1.35; }
+      .msg { margin-top: 10px; color: var(--muted); font-size: 12px; }
+      .guardian { display:inline-flex; align-items:center; gap:10px; padding:10px 12px; border-radius: 14px; border:1px solid rgba(51,255,204,.35); background: rgba(51,255,204,.07); }
+      .guardian b { letter-spacing:.18em; text-transform:uppercase; }
+      .pulse { animation: pulse 1.4s ease-in-out infinite; }
+      @keyframes pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.35); } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <div class="brand">Tradable Energy Token</div>
+          <div class="title">Founding Members — Genesis Guardian Program</div>
+          <div class="sub">Secure your wallet with hardware-bound attestation. Your guardian certificate is bound to your device.</div>
+        </div>
+        <div class="pill mono">
+          <span class="dot" id="secDot"></span>
+          <span id="secText">Universal Security: Checking…</span>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <div class="row" style="justify-content:space-between;">
+            <div>
+              <div class="brand">Balance</div>
+              <div class="bal" id="bal">—</div>
+              <div class="badges mono">
+                <span class="pill"><span class="dot" id="guardianDot"></span> <span id="guardianText">GENESIS GUARDIAN: OFF</span></span>
+                <span class="pill"><span class="dot" id="hwDot"></span> <span id="hwText">Hardware Secured: UNLINKED</span></span>
+              </div>
+            </div>
+            <div class="guardian mono" id="guardianBadge" style="display:none;">
+              <span class="dot ok pulse"></span>
+              <div>
+                <b>GENESIS GUARDIAN</b><div style="color:var(--muted); font-size:12px;">100,000 TET protected</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:14px;">
+            <div class="row" style="justify-content:space-between; align-items:flex-start;">
+              <div>
+                <div class="brand">Welcome Flow</div>
+                <div class="hint">Browser can’t access Secure Enclave directly. This button generates the exact command that triggers Touch ID in <span class="mono">tet-signer</span> and registers your Founding Member Certificate.</div>
+              </div>
+              <button id="secureBtn">Secure My Wallet</button>
+            </div>
+            <textarea class="cmd mono" id="cmd" readonly placeholder="Command will appear here…"></textarea>
+            <div class="row" style="margin-top:10px;">
+              <button id="copyBtn">Copy Command</button>
+              <button id="refreshBtn">Refresh Status</button>
+              <div class="msg mono" id="msg"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="brand">AI Proxy</div>
+          <div class="hint">Chat-like interface is in the main console for now. Once you’re a Guardian, each message can be paid and hardware-attested via <span class="mono">POST /ai/proxy</span>.</div>
+          <div class="hint mono" style="margin-top:12px;">Tip: After securing, check <span class="mono">/founding/cert/&lt;wallet&gt;</span> via API to see your device-bound certificate.</div>
+        </div>
+      </div>
+    </div>
+    <script src="/assets/founding.js" defer></script>
+  </body>
+</html>
+

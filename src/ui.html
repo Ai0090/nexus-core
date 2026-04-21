@@ -1,0 +1,1742 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TET</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;0,700;1,400&family=Roboto+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg: #000000;
+        --bg-elev: #0a0a0a;
+        --fg: #fafafa;
+        --muted: #a3a3a3;
+        --line: #262626;
+        --card: #0a0a0a;
+        --accent: #fafafa;
+        /* Swiss private-bank champagne / gold for primary figures */
+        --gold: #d4c4a8;
+        --gold-strong: #e8dcc8;
+        --cyan: #06b6d4;
+        --mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+        --serif: "Crimson Pro", "Times New Roman", Georgia, serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+        letter-spacing: -0.01em;
+        -webkit-font-smoothing: antialiased;
+      }
+      .heading-serif, .hero-title, .card h3 { font-family: var(--serif); font-weight: 600; }
+      .mono, .bal, .stat-num, .wallet-id-box, input, textarea, code, pre, .terminal-kpi-num {
+        font-family: var(--mono);
+      }
+      .accent-gold { color: var(--gold); }
+      .accent-cyan { color: var(--cyan); }
+      .wrap { max-width: 920px; margin: 0 auto; padding: 36px 20px 96px; }
+      .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); }
+      .bal {
+        font-size: clamp(36px, 8vw, 52px);
+        font-weight: 600;
+        margin: 12px 0 0;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.05;
+        color: var(--gold-strong);
+      }
+      .tabs { display: flex; gap: 0; margin-top: 36px; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 0; background: var(--bg-elev); }
+      .tab {
+        padding: 12px 20px;
+        border-radius: 0;
+        border: none;
+        border-right: 1px solid var(--line);
+        background: transparent;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        cursor: pointer;
+      }
+      .tab:last-child { border-right: none; }
+      .tab.active { background: var(--fg); color: var(--bg); }
+      .pane { display: none; margin-top: 0; }
+      .pane.active { display: block; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 2px;
+        padding: 24px 22px;
+        margin-bottom: 16px;
+      }
+      /* Pro terminal: Market 2-column grid */
+      .market-grid {
+        display: grid;
+        grid-template-columns: 1.25fr 0.95fr;
+        gap: 14px;
+        align-items: start;
+      }
+      @media (max-width: 980px) {
+        .market-grid { grid-template-columns: 1fr; }
+      }
+      .market-right { position: sticky; top: 14px; }
+      @media (max-width: 980px) { .market-right { position: static; } }
+      .market-metrics {
+        border: 1px solid rgba(212, 196, 168, 0.28);
+        background: linear-gradient(180deg, rgba(212, 196, 168, 0.08) 0%, var(--card) 70%);
+      }
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+      @media (max-width: 980px) { .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      .metric {
+        border: 1px solid var(--line);
+        background: rgba(0,0,0,0.55);
+        padding: 12px 12px;
+      }
+      .metric .k { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+      .metric .v { margin-top: 6px; font-size: 18px; font-weight: 700; letter-spacing: -0.02em; color: var(--gold-strong); font-variant-numeric: tabular-nums; font-family: var(--mono); }
+      .metric .v.accent { color: var(--cyan); }
+      .orderbook {
+        border: 1px solid var(--line);
+        background: rgba(0,0,0,0.35);
+      }
+      .ob-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+      .ob-col { border: 1px solid var(--line); background: #000; }
+      .ob-head { padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 600; display:flex; justify-content:space-between; font-family: var(--mono); }
+      .ob-rows { max-height: 260px; overflow: auto; }
+      .ob-row { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 8px 12px; font-family: var(--mono); font-size: 12px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+      .ob-row:last-child { border-bottom: none; }
+      .ob-row .bar { position:absolute; inset:0; opacity:0.12; pointer-events:none; }
+      .ob-row.ask { color: #fecaca; }
+      .ob-row.ask .bar { background: linear-gradient(90deg, rgba(239,68,68,0.0) 0%, rgba(239,68,68,0.38) 100%); }
+      .ob-row.bid { color: #bbf7d0; }
+      .ob-row.bid .bar { background: linear-gradient(90deg, rgba(6,182,212,0.38) 0%, rgba(6,182,212,0.0) 100%); }
+      .ob-row .sz { justify-self:end; color: var(--fg); }
+      .trade-panel { border: 1px solid rgba(212, 196, 168, 0.22); background: linear-gradient(180deg, rgba(0,0,0,0.55) 0%, #000 100%); }
+      .trade-actions { display: grid; gap: 10px; margin-top: 12px; }
+      .primary.buy { background: linear-gradient(135deg, #22c55e 0%, #16a34a 60%, #0f7665 100%); border: none; color:#001; }
+      .primary.sell { background: linear-gradient(135deg, #ef4444 0%, #dc2626 60%, #991b1b 100%); border: none; color:#001; }
+      .primary.big { padding: 18px 22px; font-size: 14px; letter-spacing: 0.14em; }
+      .settle-note.slim { margin-top: 14px; background: rgba(255,255,255,0.03); color: var(--muted); border-radius: 2px; border: 1px solid var(--line); }
+      .tet-advantage {
+        background: linear-gradient(160deg, rgba(212, 196, 168, 0.12) 0%, var(--card) 55%, #000 100%);
+        border: 1px solid rgba(212, 196, 168, 0.35);
+        border-radius: 2px;
+        padding: 26px 22px 22px;
+        margin-bottom: 20px;
+      }
+      .tet-advantage-title {
+        margin: 0 0 8px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--gold);
+        font-family: var(--mono);
+      }
+      .tet-advantage-headline {
+        margin: 0 0 20px;
+        font-size: clamp(22px, 4.2vw, 30px);
+        font-weight: 700;
+        letter-spacing: -0.03em;
+        line-height: 1.12;
+        font-family: var(--serif);
+        color: var(--gold-strong);
+      }
+      .tet-advantage-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 12px;
+      }
+      .tet-advantage-card {
+        background: rgba(0, 0, 0, 0.55);
+        border: 1px solid var(--line);
+        border-radius: 2px;
+        padding: 14px 12px;
+        min-height: 120px;
+      }
+      .tet-advantage-card .ico {
+        font-size: 20px;
+        margin-bottom: 6px;
+        display: block;
+        color: var(--cyan);
+        line-height: 1;
+      }
+      .tet-advantage-card h4 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: var(--fg);
+        font-family: var(--serif);
+      }
+      .tet-advantage-card p {
+        margin: 0;
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--muted);
+      }
+      .devdocs-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        cursor: pointer;
+        user-select: none;
+        margin-top: 14px;
+        font-family: var(--mono);
+      }
+      .devdocs-link:hover { color: var(--fg); border-color: rgba(212, 196, 168, 0.55); }
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.78);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 18px;
+        z-index: 3000;
+      }
+      .modal-backdrop.active { display: flex; }
+      .modal {
+        width: min(820px, 100%);
+        border-radius: 2px;
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, #0a0a0a 0%, #000 100%);
+        box-shadow: 0 28px 96px rgba(0, 0, 0, 0.7);
+        overflow: hidden;
+      }
+      .modal-head {
+        padding: 18px 18px 14px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+      }
+      .modal-title {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        color: var(--gold-strong);
+        font-family: var(--serif);
+      }
+      .modal-sub {
+        margin: 6px 0 0;
+        font-size: 12px;
+        line-height: 1.55;
+        color: var(--muted);
+        max-width: 64ch;
+        font-family: var(--mono);
+      }
+      .modal-close {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--fg);
+        border-radius: 2px;
+        padding: 10px 12px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        font-family: var(--mono);
+      }
+      .modal-body { padding: 18px; }
+      .doc-step { margin-bottom: 14px; font-size: 13px; color: var(--muted); }
+      .doc-step b { color: var(--fg); }
+      .codeblock {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        background: #000;
+        border-radius: 2px;
+        padding: 12px;
+        position: relative;
+      }
+      .codeblock pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: #e5e7eb;
+        font-size: 12px;
+        line-height: 1.5;
+        font-family: var(--mono);
+      }
+      .copy-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--fg);
+        border-radius: 2px;
+        padding: 8px 10px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+        font-family: var(--mono);
+      }
+      .card h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; }
+      .hint { margin: 0 0 16px; font-size: 13px; color: var(--muted); line-height: 1.45; }
+      .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+      input, select, textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: #000000;
+        color: var(--fg);
+        padding: 12px 14px;
+        border-radius: 2px;
+        font-size: 14px;
+        font-family: var(--mono);
+      }
+      textarea { min-height: 100px; resize: vertical; }
+      button.primary {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: var(--fg);
+        color: var(--bg);
+        padding: 14px 20px;
+        border-radius: 2px;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        cursor: pointer;
+        font-family: var(--mono);
+      }
+      button.primary:hover { opacity: 0.88; }
+      button.secondary {
+        border: 1px solid var(--line);
+        background: transparent;
+        color: var(--fg);
+        padding: 10px 16px;
+        border-radius: 2px;
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.06em;
+        cursor: pointer;
+        font-family: var(--mono);
+      }
+      button.secondary:hover { border-color: var(--gold); color: var(--gold); }
+      button.danger {
+        border: 1px solid #e8d4d4;
+        background: #fff8f8;
+        color: #8b2a2a;
+        padding: 8px 14px;
+        border-radius: 10px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .msg { margin-top: 14px; font-size: 14px; color: var(--muted); }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+      details.adv { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 16px; }
+      details.adv > summary {
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+        list-style: none;
+      }
+      details.adv > summary::-webkit-details-marker { display: none; }
+      .kv { display: flex; flex-wrap: wrap; gap: 12px 20px; margin-top: 12px; font-size: 13px; color: var(--muted); }
+      .kv b { color: var(--fg); font-weight: 500; }
+      .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #ccc; }
+      .dot.ok { background: #2d8a54; }
+      .swap-label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.14em; margin: 0 0 8px; }
+      .swap-arrow { text-align: center; color: var(--muted); margin: 10px 0; font-size: 20px; }
+      .preview { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .order-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+      .order-row:last-child { border-bottom: none; }
+      .celebrate { margin-top: 14px; padding: 14px; border-radius: 14px; border: 1px solid #d4eadc; background: #f4fbf6; font-size: 14px; }
+      .burn-metric { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+      .burn-metric .burn-label { font-size: 10px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: #64748b; }
+      .burn-metric .burn-value { margin-top: 4px; font-size: 15px; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+      .seed-gate { display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.94); align-items: center; justify-content: center; padding: 22px; }
+      .seed-gate.active { display: flex; }
+      .seed-gate-card { max-width: 420px; width: 100%; background: var(--bg-elev); border: 1px solid var(--line); border-radius: 2px; padding: 28px 22px; }
+      .seed-gate-card h2 { margin: 0 0 8px; font-size: 22px; font-family: var(--serif); font-weight: 600; }
+      .seed-gate-phrase { font-family: var(--mono); font-size: 13px; line-height: 1.5; padding: 14px; background: #000; border: 1px solid var(--line); border-radius: 2px; margin: 12px 0; word-break: break-word; color: var(--fg); }
+      .seed-gate-row { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; margin-top: 12px; }
+      .mode-row { display: flex; gap: 8px; margin-bottom: 16px; }
+      .mode-row .mode { flex: 1; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-elev); font-size: 12px; font-weight: 600; cursor: pointer; color: var(--muted); }
+      .mode-row .mode.active { border-color: var(--fg); color: var(--fg); background: var(--card); }
+      .settle-note { margin-top: 14px; padding: 12px 14px; background: #f8fafc; border: 1px solid var(--line); border-radius: 12px; font-size: 12px; line-height: 1.45; color: #334155; }
+      .settle-note code { display: block; margin-top: 6px; font-size: 11px; word-break: break-all; color: #0f172a; }
+      .stats-strip { margin-top: 24px; }
+      .stats-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+      }
+      .stats-title {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .stats-live { font-size: 11px; color: var(--accent); }
+      .pulse-metrics-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 0;
+        border: 1px solid var(--line);
+        background: var(--bg-elev);
+      }
+      @media (min-width: 640px) {
+        .pulse-metrics-grid { grid-template-columns: repeat(2, 1fr); }
+      }
+      @media (min-width: 900px) {
+        .pulse-metrics-grid { grid-template-columns: repeat(3, 1fr); }
+      }
+      .stats-metrics {
+        background: transparent;
+        border: none;
+        border-bottom: 1px solid var(--line);
+        border-right: 1px solid var(--line);
+        border-radius: 0;
+        padding: 16px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-height: 100%;
+      }
+      .stats-metrics:nth-child(3n) { border-right: none; }
+      @media (max-width: 639px) {
+        .stats-metrics { border-right: none; }
+      }
+      /* Terminal tab: centerpiece — pure black desk */
+      #pane-terminal {
+        background: #000000;
+        margin: 28px -20px 0;
+        padding: 8px 20px 40px;
+        border-top: 1px solid var(--line);
+      }
+      #pane-worker .card.terminal-desk {
+        background: #000000;
+        border-color: rgba(212, 196, 168, 0.28);
+      }
+      #pane-terminal .card.terminal-desk {
+        background: #000000;
+        border-color: rgba(212, 196, 168, 0.28);
+        margin-bottom: 0;
+      }
+      .terminal-chart-stage {
+        border: 1px solid rgba(212, 196, 168, 0.22);
+        background: #000000;
+        padding: 8px;
+        margin-bottom: 24px;
+      }
+      .terminal-chart-stage canvas { display: block; width: 100%; height: auto; max-height: 280px; }
+      .terminal-kpi-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+      }
+      .terminal-kpi-num {
+        display: block;
+        margin-top: 8px;
+        font-size: clamp(18px, 4vw, 26px);
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .chart-axis-label-x {
+        text-align: center;
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.06em;
+        color: #6e7681;
+        margin-top: 4px;
+      }
+      .stat-metric {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .stat-label {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .stat-num {
+        font-size: 15px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        color: var(--fg);
+        line-height: 1.2;
+      }
+      .cost-prompt-line {
+        font-size: 15px;
+        font-weight: 600;
+        margin: 0 0 14px;
+        letter-spacing: -0.02em;
+      }
+      .ai-actions { display: flex; gap: 10px; margin-top: 16px; align-items: stretch; }
+      .ai-actions button.primary { width: auto; flex: 1; }
+      .ai-actions button.secondary { flex: 0 0 auto; min-width: 100px; }
+      .wp-lede {
+        font-size: 14px;
+        color: var(--muted);
+        margin: 0 0 24px;
+        line-height: 1.55;
+      }
+      .wp h2 {
+        margin: 28px 0 12px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .wp h2:first-child { margin-top: 0; }
+      .wp p { margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: var(--fg); }
+      .wp a.wp-ext {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--accent);
+        text-decoration: none;
+        border-bottom: 1px solid rgba(26, 26, 34, 0.22);
+      }
+      .wp a.wp-ext:hover { border-bottom-color: var(--accent); }
+
+      /* Landing → terminal bridge */
+      .hero {
+        margin: 0 0 8px;
+        padding: 36px 26px 40px;
+        background: var(--bg-elev);
+        border: 1px solid var(--line);
+        border-radius: 2px;
+        text-align: center;
+      }
+      .hero-kicker {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin: 0 0 14px;
+      }
+      .hero-title {
+        font-family: var(--serif);
+        font-size: clamp(28px, 6.5vw, 38px);
+        font-weight: 600;
+        margin: 0 0 18px;
+        line-height: 1.12;
+        letter-spacing: -0.035em;
+        color: var(--fg);
+      }
+      .hero-lede {
+        font-size: 16px;
+        color: var(--muted);
+        line-height: 1.65;
+        margin: 0 auto 14px;
+        max-width: 38em;
+      }
+      .hero-bridge {
+        font-size: 14px;
+        font-weight: 500;
+        margin: 0;
+        line-height: 1.55;
+        color: var(--fg);
+        opacity: 0.92;
+      }
+      .terminal-divider {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin: 36px 0 24px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .terminal-divider::before,
+      .terminal-divider::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--line), transparent);
+      }
+      .vision-section-label {
+        margin: 0 0 8px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .manifesto-body {
+        border: 1px solid var(--line);
+        padding: 18px 16px;
+        border-radius: 2px;
+        line-height: 1.62;
+        font-size: 13px;
+        background: #000;
+        font-family: var(--mono);
+      }
+      .manifesto-body strong.highlight {
+        display: block;
+        font-size: 15px;
+        font-weight: 600;
+        font-family: inherit;
+        letter-spacing: -0.02em;
+        margin-bottom: 12px;
+        color: var(--accent);
+      }
+      .vision-cta {
+        margin: 24px 0 8px;
+        text-align: center;
+      }
+      .vision-cta button.secondary {
+        padding: 14px 22px;
+        font-weight: 600;
+      }
+      .vault-after-vision-hint {
+        font-size: 13px;
+        color: var(--muted);
+        margin: 0 0 14px;
+        line-height: 1.5;
+      }
+      .wallet-id-row {
+        display: flex;
+        gap: 10px;
+        align-items: stretch;
+        flex-wrap: wrap;
+      }
+      .wallet-id-box {
+        flex: 1;
+        min-width: 0;
+        margin: 0;
+        padding: 12px 14px;
+        border-radius: 2px;
+        border: 1px solid var(--line);
+        background: #000000;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.45;
+        word-break: break-all;
+        color: var(--fg);
+      }
+      .wallet-id-row button.secondary {
+        flex: 0 0 auto;
+        align-self: center;
+      }
+      .terminal-price-ribbon {
+        margin: 0 0 18px;
+        padding: 14px 18px;
+        border-radius: 2px;
+        border: 1px solid var(--line);
+        background: var(--bg-elev);
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        font-variant-numeric: tabular-nums;
+        font-family: var(--mono);
+      }
+      .terminal-price-ribbon .muted {
+        display: block;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .msg.success {
+        color: var(--cyan);
+        font-weight: 500;
+      }
+      /* Consumer UX: onboarding & lock */
+      #lockScreen,
+      #onboardingRoot {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 4000;
+        align-items: center;
+        justify-content: center;
+        padding: max(24px, env(safe-area-inset-bottom));
+        background: radial-gradient(ellipse 140% 90% at 50% -10%, rgba(232, 220, 200, 0.07), #000000 55%);
+      }
+      #appShell {
+        display: none;
+      }
+      html[data-ux="lock"] #lockScreen {
+        display: flex !important;
+      }
+      html[data-ux="onboard"] #onboardingRoot {
+        display: flex !important;
+      }
+      html[data-ux="lock"] #onboardingRoot {
+        display: none !important;
+      }
+      html[data-ux="app"] #lockScreen,
+      html[data-ux="app"] #onboardingRoot {
+        display: none !important;
+      }
+      html[data-ux="app"] #appShell {
+        display: block !important;
+      }
+      .ux-panel {
+        width: 100%;
+        max-width: 420px;
+        border: 1px solid rgba(212, 196, 168, 0.22);
+        border-radius: 16px;
+        padding: 32px 28px;
+        background: rgba(10, 10, 10, 0.94);
+        backdrop-filter: blur(12px);
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+      }
+      .ux-panel h1,
+      .ux-panel h2 {
+        font-family: var(--serif);
+        font-weight: 700;
+        margin: 0 0 10px;
+        font-size: 26px;
+        letter-spacing: -0.03em;
+      }
+      .ux-panel .ux-lede {
+        font-size: 15px;
+        color: var(--muted);
+        line-height: 1.5;
+        margin: 0 0 24px;
+      }
+      .ux-panel input[type="password"],
+      .ux-panel input[type="text"] {
+        margin-top: 8px;
+      }
+      .ux-panel .ux-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-top: 20px;
+      }
+      .ux-panel button.primary {
+        margin-top: 0;
+      }
+      .ux-link {
+        background: none;
+        border: none;
+        color: var(--cyan);
+        font-family: var(--mono);
+        font-size: 12px;
+        cursor: pointer;
+        text-decoration: underline;
+        padding: 12px 0 0;
+      }
+      .ux-step[hidden] {
+        display: none !important;
+      }
+      .ux-mnemonic-box {
+        font-family: var(--mono);
+        font-size: 14px;
+        line-height: 1.65;
+        padding: 16px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: #000;
+        margin: 16px 0;
+        word-break: break-word;
+      }
+      .ux-checkbox {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        margin-top: 14px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      /* 4-pane console (matches worker_dashboard) */
+      .dashboard-root {
+        display: flex;
+        gap: 0;
+        align-items: stretch;
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 8px 8px 64px;
+      }
+      .nav-rail {
+        width: 200px;
+        flex-shrink: 0;
+        border-right: 1px solid var(--line);
+        padding: 16px 10px 24px 0;
+      }
+      .nav-brand {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        padding: 0 8px 14px;
+        border-bottom: 1px solid var(--line);
+        margin-bottom: 10px;
+      }
+      .nav-items {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .nav-item {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+        padding: 10px 10px;
+        border-radius: 2px;
+        cursor: pointer;
+        font-family: var(--mono);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .nav-item:hover {
+        color: var(--fg);
+        border-color: var(--line);
+        background: var(--bg-elev);
+      }
+      .nav-item.active {
+        color: var(--bg);
+        background: var(--fg);
+        border-color: var(--fg);
+      }
+      .nav-item.logout {
+        margin-top: 10px;
+        border-color: rgba(239, 68, 68, 0.35);
+        background: rgba(239, 68, 68, 0.12);
+        color: rgba(255, 255, 255, 0.95);
+      }
+      .nav-item.logout:hover {
+        border-color: rgba(239, 68, 68, 0.55);
+        background: rgba(239, 68, 68, 0.16);
+        color: #fff;
+      }
+      .nav-item .ni-sub {
+        display: block;
+        font-size: 9px;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+        text-transform: none;
+        margin-top: 4px;
+        opacity: 0.85;
+      }
+      .dashboard-main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .dash-header {
+        padding: 20px 4px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+      .dash-main {
+        flex: 1;
+        padding: 20px 4px 48px;
+      }
+      @media (max-width: 860px) {
+        .dashboard-root {
+          flex-direction: column;
+        }
+        .nav-rail {
+          width: 100%;
+          border-right: none;
+          border-bottom: 1px solid var(--line);
+          padding-bottom: 12px;
+        }
+        .nav-items {
+          flex-direction: row;
+          flex-wrap: wrap;
+        }
+        .nav-item {
+          flex: 1 1 42%;
+        }
+      }
+      .pane-worker-region {
+        margin-top: 0;
+        padding-top: 0;
+      }
+      .pane-worker-region .terminal-desk {
+        margin-top: 16px;
+      }
+    </style>
+    <style>
+      /* =========================================================
+         BRUTALIST TERMINAL OVERRIDE (global UI synchronization)
+         - Pure black/white
+         - Monospace everywhere
+         - No radius/shadow/gradients
+         - Sharp 1px borders
+         ========================================================= */
+      :root {
+        --bg: #000000 !important;
+        --bg-elev: #000000 !important;
+        --fg: #ffffff !important;
+        --muted: #aaaaaa !important;
+        --line: #444444 !important;
+        --card: #000000 !important;
+        --accent: #ffffff !important;
+        --gold: #ffffff !important;
+        --gold-strong: #ffffff !important;
+        --cyan: #00ff00 !important;
+        --mono: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Monaco, Consolas, "Courier New", monospace !important;
+        --serif: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Monaco, Consolas, "Courier New", monospace !important;
+      }
+      html, body {
+        background: #000000 !important;
+        color: #ffffff !important;
+        font-family: var(--mono) !important;
+      }
+      * {
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+      }
+      .card, .nav-rail, .dash-header, .terminal-price-ribbon, .market-metrics, .orderbook, .trade-panel,
+      .metric, .ob-col, .ob-row, .tet-advantage, .modal, .seed-gate-card, .ux-panel {
+        background: #000000 !important;
+        background-image: none !important;
+        border: 1px solid #444444 !important;
+      }
+      .tab, .nav-item {
+        background: transparent !important;
+        color: #aaaaaa !important;
+        border: 1px solid #444444 !important;
+      }
+      .tab.active, .nav-item.active {
+        background: #ffffff !important;
+        color: #000000 !important;
+        border-color: #ffffff !important;
+      }
+      input, select, textarea {
+        background: #000000 !important;
+        color: #ffffff !important;
+        border: 1px solid #444444 !important;
+      }
+      button, .devdocs-link {
+        background: transparent !important;
+        color: #ffffff !important;
+        border: 1px solid #ffffff !important;
+      }
+      button:hover, .devdocs-link:hover {
+        background: #ffffff !important;
+        color: #000000 !important;
+      }
+      /* Prominent logout, but brutalist */
+      #btnLogoutTop, .nav-item.logout {
+        background: transparent !important;
+        color: #ff3333 !important;
+        border: 1px solid #ff3333 !important;
+      }
+      #btnLogoutTop:hover, .nav-item.logout:hover {
+        background: #ff3333 !important;
+        color: #000000 !important;
+      }
+      /* Remove gradients even if inlined */
+      [style*="linear-gradient"], [style*="radial-gradient"] {
+        background-image: none !important;
+      }
+
+      /* Operations sectors grid */
+      .sector {
+        border: 1px solid #ffffff !important;
+        padding: 14px 12px !important;
+        margin-bottom: 18px !important;
+      }
+      .sectorHead {
+        font-weight: 900 !important;
+        letter-spacing: 0.08em !important;
+        text-transform: uppercase !important;
+        margin-bottom: 12px !important;
+        color: #ffffff !important;
+        font-family: var(--mono) !important;
+      }
+      .sectorGrid {
+        display: grid !important;
+        grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+        gap: 16px !important;
+      }
+      .sectorBox {
+        grid-column: span 12 !important;
+        border: 1px solid #ffffff !important;
+        padding: 12px !important;
+        background: #000000 !important;
+      }
+      .sectorBoxHead {
+        font-size: 12px !important;
+        font-weight: 900 !important;
+        letter-spacing: 0.12em !important;
+        text-transform: uppercase !important;
+        color: #aaaaaa !important;
+        margin-bottom: 10px !important;
+        font-family: var(--mono) !important;
+      }
+      @media (min-width: 980px) {
+        .sectorBox.half { grid-column: span 6 !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <button
+      type="button"
+      id="btnLogoutTop"
+      style="
+        position: fixed;
+        top: 14px;
+        right: 14px;
+        z-index: 9999;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(239, 68, 68, 0.45);
+        background: rgba(239, 68, 68, 0.14);
+        color: rgba(255, 255, 255, 0.92);
+        font-weight: 900;
+        letter-spacing: 0.10em;
+        text-transform: uppercase;
+        font-size: 11px;
+        cursor: pointer;
+        display: none;
+      "
+    >
+      Logout
+    </button>
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem("tet-enc-wallet-v1"))
+            document.documentElement.setAttribute("data-ux", "lock");
+          else document.documentElement.setAttribute("data-ux", "onboard");
+        } catch (_) {
+          document.documentElement.setAttribute("data-ux", "onboard");
+        }
+      })();
+    </script>
+    <div id="lockScreen" class="ux-overlay" aria-modal="true" role="dialog">
+      <div class="ux-panel">
+        <h2>Welcome Back to TET Network</h2>
+        <p class="ux-lede">Enter your local PIN to unlock. Your 12-word phrase stays encrypted on this device.</p>
+        <label class="stat-label" for="unlockPin">PIN</label>
+        <input id="unlockPin" type="password" maxlength="128" autocomplete="current-password" inputmode="numeric" />
+        <div class="ux-actions">
+          <button type="button" class="primary" id="btnUnlock">Unlock (Login)</button>
+          <button type="button" class="ux-link" id="btnForgotPin">Not you? Clear local data and generate a new wallet</button>
+        </div>
+        <p class="msg" id="unlockMsg" style="margin-top: 16px"></p>
+      </div>
+    </div>
+    <div id="onboardingRoot" class="ux-overlay" aria-modal="true">
+      <div class="ux-panel" style="max-width: 460px">
+        <div id="obStepWelcome" class="ux-step">
+          <h1 style="font-size: 30px">Welcome to TET Network</h1>
+          <p class="ux-lede">Generate a secure wallet and protect it with a PIN. You will not need your recovery phrase for daily use.</p>
+          <div style="border: 1px solid var(--line); border-radius: 12px; padding: 14px 14px; background: #000;">
+            <div class="eyebrow" style="margin: 0 0 10px; font-size: 10px;">TET Network Service Agreement</div>
+            <p class="hint" style="margin: 0; font-size: 12px; line-height: 1.5;">
+              TET is a utility token used exclusively to pay for AI compute power on the TET Network. It is not an investment contract or security.
+              You are solely responsible for local tax compliance.
+            </p>
+            <label class="ux-checkbox" style="margin-top: 12px;"><input type="checkbox" id="chkTosAgree" /> <span>I agree to the Terms.</span></label>
+          </div>
+          <div class="ux-actions">
+            <button type="button" class="primary" id="btnObGenerate" disabled>Generate your secure wallet</button>
+            <button type="button" class="secondary" id="btnObRestore">Already have a wallet? Login with Recovery Phrase</button>
+          </div>
+          <p class="msg" id="obWelcomeMsg" style="margin-top: 14px"></p>
+        </div>
+        <div id="obStepPhrase" class="ux-step" hidden>
+          <h2>Save your phrase</h2>
+          <p class="ux-lede">Write these 12 words offline. Anyone with them can spend your TET.</p>
+          <textarea id="obPhraseTa" class="ux-mnemonic-box" readonly spellcheck="false" aria-label="Your 12-word recovery phrase"></textarea>
+          <div class="kv" style="margin-top: 10px;">
+            <span class="mono">Derived Wallet ID: <b id="obPhraseWid" class="accent-gold mono">—</b></span>
+          </div>
+          <div class="row" style="margin-top: 12px;">
+            <button type="button" class="secondary" id="btnCopyObPhrase">Copy 12 words</button>
+            <button type="button" class="secondary" id="btnCopyObWid">Copy Wallet ID</button>
+          </div>
+          <label class="ux-checkbox"
+            ><input type="checkbox" id="chkObSaved" />
+            <span
+              >I have securely written down my 12-word recovery phrase. I understand that if I lose this, TET Network
+              cannot recover my funds.</span
+            ></label
+          >
+          <div class="ux-actions">
+            <button type="button" class="primary" id="btnObAckHide" disabled>Acknowledge &amp; Hide Phrase</button>
+          </div>
+          <p class="msg" id="obPhraseMsg" style="margin-top: 12px"></p>
+        </div>
+        <div id="obStepRestore" class="ux-step" hidden>
+          <h2>Login with Recovery Phrase</h2>
+          <p class="ux-lede">Paste your 12-word recovery phrase, then set a new PIN to encrypt it locally.</p>
+          <textarea id="obRestoreTa" rows="3" placeholder="twelve english words…"></textarea>
+          <div class="kv" style="margin-top: 12px;">
+            <span class="mono">Derived Wallet ID: <b id="obRestoreDerived" class="accent-gold mono">—</b></span>
+          </div>
+          <p class="msg mono" id="obRestoreDerivedMsg" style="margin-top: 10px;"></p>
+          <div class="ux-actions">
+            <button type="button" class="primary" id="btnObRestoreNext">Continue</button>
+          </div>
+          <p class="msg" id="obRestoreMsg" style="margin-top: 12px"></p>
+        </div>
+        <div id="obStepPin" class="ux-step" hidden>
+          <h2>Create PIN</h2>
+          <p class="ux-lede">Minimum 6 characters. This encrypts your phrase in the browser.</p>
+          <label class="stat-label" for="obPin1">PIN</label>
+          <input id="obPin1" type="password" maxlength="128" autocomplete="new-password" />
+          <label class="stat-label" for="obPin2" style="margin-top: 12px">Confirm PIN</label>
+          <input id="obPin2" type="password" maxlength="128" autocomplete="new-password" />
+          <div class="ux-actions">
+            <button type="button" class="primary" id="btnObPinFinish">Encrypt &amp; continue</button>
+          </div>
+          <p class="msg" id="obPinMsg" style="margin-top: 12px"></p>
+        </div>
+      </div>
+    </div>
+    <div id="appShell">
+    <div class="dashboard-root">
+      <aside class="nav-rail" aria-label="Dashboard">
+        <div class="nav-brand mono accent-gold">TET · Console</div>
+        <div class="nav-items" id="mainTabs" role="tablist">
+          <button type="button" class="nav-item active" data-tab="vault" id="tabVault" role="tab" aria-selected="true">Vault<span class="ni-sub">Balance · transfer</span></button>
+          <button type="button" class="nav-item" data-tab="ai" id="tabAi" role="tab" aria-selected="false">AI Playground<span class="ni-sub">Prompt · utility</span></button>
+          <button type="button" class="nav-item" data-tab="worker" id="tabWorker" role="tab" aria-selected="false">Worker Nodes<span class="ni-sub">Charts · earn</span></button>
+          <button type="button" class="nav-item" data-tab="market" id="tabMarket" role="tab" aria-selected="false">Market<span class="ni-sub">DEX · terminal</span></button>
+          <button type="button" class="nav-item" data-tab="vision" id="tabVision" role="tab" aria-selected="false">Vision<span class="ni-sub">Whitepaper · roadmap</span></button>
+          <button type="button" class="nav-item logout" data-tab="logout" id="tabLogout" role="tab" aria-selected="false">LOGOUT<span class="ni-sub">Disconnect wallet</span></button>
+        </div>
+      </aside>
+      <div class="dashboard-main">
+        <header class="dash-header">
+          <p class="eyebrow">Nexus Network · TET</p>
+          <h1 class="hero-title" id="dashViewTitle" style="margin:10px 0 0">Vault</h1>
+          <p class="hero-lede" id="dashViewSub">Balance, recovery phrase, and on-ledger transfers.</p>
+        </header>
+        <div class="dash-main">
+      <section id="pane-vault" class="pane active" role="tabpanel" aria-labelledby="tabVault">
+      <div class="sector">
+        <div class="sectorHead">[ SECTOR_01: VAULT ]</div>
+      <div class="eyebrow" style="margin-top:0">Balance</div>
+      <div class="bal" id="bal">—</div>
+        <div class="hint mono" id="stakedLine" style="margin: 10px 0 0;">Staked: —</div>
+        <p class="vault-after-vision-hint">
+          Non-custodial keys stay in this browser; only your public wallet id is registered on the core.
+        </p>
+        <div class="card">
+          <h3>Wallet ID</h3>
+          <p class="hint">Public address · use for Genesis allocation and operator support.</p>
+          <div class="wallet-id-row">
+            <div id="vaultWalletId" class="wallet-id-box" role="textbox" aria-readonly="true">—</div>
+            <button type="button" class="secondary" id="btnCopyWalletId">Copy</button>
+          </div>
+          <p class="msg" id="walletIdCopyMsg" style="margin-top: 10px;"></p>
+        </div>
+        <div class="card">
+          <h3>Recovery phrase</h3>
+          <p class="hint">
+            Wallets are created in the onboarding flow. Your 12 words are generated and encrypted <strong>only</strong> in
+            this browser — they are never sent to the TET core (only your public wallet id is registered).
+          </p>
+          <div class="msg mono" id="smsg"></div>
+        </div>
+        <div class="card">
+          <h3>Transfer TET</h3>
+          <p class="hint">
+            P2P-style on-ledger transfer from the core's active wallet. Atomic settlement with append-only audit. Signed with your
+            recovery phrase (Ed25519); no API key for transfers.
+          </p>
+          <label class="stat-label" for="transferToAddr" style="display: block; margin-top: 10px">Recipient Wallet ID</label>
+          <input
+            id="transferToAddr"
+            type="text"
+            class="mono"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="Enter exact wallet address…"
+            style="width: 100%; margin-top: 6px"
+          />
+          <label class="stat-label" for="transferAmtTet" style="display: block; margin-top: 12px">Amount</label>
+          <input
+            id="transferAmtTet"
+            type="text"
+            inputmode="decimal"
+            autocomplete="off"
+            placeholder="0.00 TET"
+            style="width: 100%; margin-top: 6px"
+          />
+          <button type="button" class="primary" id="btnSendTetCore" style="margin-top: 14px; width: 100%">Send TET</button>
+          <div class="msg mono" id="transferMsg" style="margin-top: 10px"></div>
+        </div>
+
+        <div class="card">
+          <h3>Diamond Hands Vault</h3>
+          <p class="hint">
+            Stake locks TET for network integrity. Workers must maintain <b>5,000 TET</b> stake to register heartbeats.
+          </p>
+          <label class="stat-label" for="stakeTetVault" style="display:block; margin-top: 10px;">Amount to stake (TET)</label>
+          <input id="stakeTetVault" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" style="width:100%; margin-top: 6px;" />
+          <button type="button" class="primary" id="btnStakeVault" style="margin-top: 14px; width: 100%;">Stake TET</button>
+          <p class="msg mono" id="stakeVaultMsg" style="margin-top: 10px;"></p>
+        </div>
+
+        <div class="card" id="founderPanel" style="display:none;">
+          <details id="founderPanelDetails">
+            <summary class="mono" style="cursor:pointer; font-weight:700; letter-spacing:0.12em; text-transform: uppercase;">
+              Founder Control Panel · Genesis
+            </summary>
+            <p class="hint" style="margin-top: 12px;">
+              Signs locally and executes <code class="mono">POST /founder/genesis</code>. Your recovery phrase is <strong>never</strong> sent to the server.
+            </p>
+            <div class="kv" style="margin-top: 10px;">
+              <span>Configured Founder Wallet ID <b class="mono" id="founderConfiguredWid">—</b></span>
+            </div>
+            <label class="stat-label" for="founderMnemonic" style="display:block; margin-top: 12px;">Founder Mnemonic (12 words)</label>
+            <textarea id="founderMnemonic" class="mono" rows="3" placeholder="twelve english words…" spellcheck="false" autocomplete="off"></textarea>
+            <div class="kv" style="margin-top: 10px;">
+              <span>Derived Wallet ID <b class="mono accent-gold" id="founderDerivedWid">—</b></span>
+            </div>
+            <label class="ux-checkbox" style="margin-top: 12px;">
+              <input type="checkbox" id="chkFounderConfirm" />
+              <span>I understand this is irreversible and will mint <strong>2,000,000,000 TET</strong> to the configured Founder wallet.</span>
+            </label>
+            <button type="button" class="primary" id="btnExecuteGenesis" style="margin-top: 14px;" disabled>
+              EXECUTE GENESIS (Mint 2B TET)
+            </button>
+            <div style="margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px;">
+              <div class="eyebrow" style="margin: 0 0 10px;">Founder Vesting (1-year cliff)</div>
+              <div class="kv" style="margin-top: 0;">
+                <span>Genesis Balance <b class="mono" id="fvGenesisBal">—</b> TET</span>
+                <span>Locked Genesis <b class="mono" id="fvGenesisLocked">—</b> TET</span>
+                <span>Unlocked Genesis <b class="mono" id="fvGenesisUnlocked">—</b> TET</span>
+                <span>Unlocks at <b class="mono" id="fvUnlockAt">—</b></span>
+                <span>Liquid Treasury Earnings (15% fees → <b class="mono">dex:treasury</b>) <b class="mono" id="fvDexTreasury">—</b> TET</span>
+              </div>
+            </div>
+            <div style="margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px;">
+              <div class="eyebrow" style="margin: 0 0 10px;">Treasury Withdrawal (liquid)</div>
+              <label class="stat-label" for="treasuryWithdrawAmt" style="display:block;">Withdraw amount (TET)</label>
+              <input id="treasuryWithdrawAmt" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" style="width:100%; margin-top: 6px;" />
+              <button type="button" class="secondary" id="btnWithdrawTreasury" style="margin-top: 12px; width: 100%;">Withdraw from Treasury</button>
+              <p class="msg mono" id="treasuryWithdrawMsg" style="margin-top: 10px;"></p>
+            </div>
+            <p class="msg mono" id="founderGenesisMsg" style="margin-top: 10px;"></p>
+          </details>
+        </div>
+      </div>
+      </section>
+
+      <section id="pane-ai" class="pane" role="tabpanel" aria-labelledby="tabAi">
+        <div class="sector">
+          <div class="sectorHead">[ SECTOR_02: AI_PLAYGROUND ]</div>
+          <div class="sectorGrid">
+            <div class="sectorBox half">
+              <div class="sectorBoxHead">AI Engine Install (Required)</div>
+              <div class="hint mono" style="margin: 0 0 10px; font-size: 12px;">
+                Install Ollama locally. No in-app downloads. No progress bars.
+              </div>
+              <a href="https://ollama.com" target="_blank" rel="noopener noreferrer" class="mono" style="text-decoration:none; display:inline-block;">
+                [ &gt; INSTALL_OLLAMA_CORE ]
+              </a>
+              <div style="margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px;">
+                <div class="sectorBoxHead" style="margin-bottom: 6px;">Local AI Verification (Ollama)</div>
+                <div class="mono"><span id="uiAiEngineStatus">—</span></div>
+                <div class="hint mono" id="uiAiEngineHint" style="margin-top: 8px; margin-bottom: 0; font-size: 11px;">
+                  Checking 127.0.0.1:11434…
+                </div>
+                <div class="row" style="margin-top: 10px;">
+                  <button type="button" class="secondary" id="btnUiCheckAiEngine" style="width:auto;">[ &gt; CHECK_CONNECTION ]</button>
+                </div>
+              </div>
+            </div>
+            <div class="sectorBox half">
+        <div class="terminal-price-ribbon">
+          <span class="muted">Spot reference (ledger index)</span>
+          <span id="tetPriceRibbon">1 TET = $— USDC</span>
+        </div>
+        <div class="card">
+          <h3>AI Playground</h3>
+          <p class="cost-prompt-line" id="costPerPromptLine">Cost per prompt: —</p>
+          <p class="hint" style="margin: -6px 0 14px; font-size: 14px; font-weight: 600;" id="costPerPromptUsdc">≈ — USDC at spot</p>
+          <div class="row" style="margin: 0 0 10px;">
+            <div style="flex: 1; min-width: 220px;">
+              <label class="stat-label" for="model" style="display:block;">Model</label>
+              <select id="model" style="margin-top: 6px;">
+                <option value="llama3" selected>llama3 (default)</option>
+                <option value="llama3:8b">llama3:8b</option>
+                <option value="llama3.1">llama3.1</option>
+                <option value="mistral">mistral</option>
+              </select>
+            </div>
+          </div>
+          <label class="stat-label" for="systemPrompt" style="display:block;">System prompt</label>
+          <textarea id="systemPrompt" placeholder="(optional) e.g. You are a concise enterprise assistant. Answer in JSON." style="min-height: 74px; margin-top: 6px;"></textarea>
+          <textarea id="prompt" placeholder="Ask anything…"></textarea>
+          <div class="ai-actions">
+            <button type="button" class="primary" id="sendMsg">Send</button>
+            <button type="button" class="secondary" id="btnResetChat">Clear</button>
+            <button type="button" class="secondary" id="btnAiUtility" title="POST /ai/utility — 1 TET from balance">Utility</button>
+          </div>
+          <div class="msg" id="cmsg"></div>
+          <details class="adv" style="margin-top: 16px;">
+            <summary>Advanced</summary>
+            <textarea id="workerProof" class="mono" placeholder="Worker proof JSON (optional)…" style="min-height: 72px; margin-top: 10px;"></textarea>
+            <div class="kv" style="margin-top: 10px;">
+              <span>Quote <b id="costKs">—</b> sm · <b id="costTet">—</b> TET</span>
+            </div>
+            <button type="button" class="secondary" id="quoteCost" style="margin-top: 12px;">Recalculate cost</button>
+          </details>
+          <textarea id="chat" class="mono" placeholder="Replies…" readonly style="margin-top: 16px; min-height: 120px;"></textarea>
+        </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="pane-worker" class="pane pane-worker-region" role="tabpanel" aria-labelledby="tabWorker">
+      <div class="sector">
+        <div class="sectorHead">[ SECTOR_03: WORKER_NODES ]</div>
+        <div class="sectorGrid">
+          <div class="sectorBox">
+            <div class="sectorBoxHead">Genesis Guardians · Founder's Grant</div>
+            <div class="mono" id="uiGenesisGuardiansLine">10 / 10,000 SLOTS OCCUPIED</div>
+            <div class="hint mono" style="margin: 8px 0 0; font-size: 11px;">
+              Only the first 10,000 nodes receive the 10,000 TET Founder's Grant.
+            </div>
+          </div>
+          <div class="sectorBox">
+      <section class="stats-strip" aria-label="Market pulse">
+        <div class="stats-head">
+          <span class="stats-title">Pulse</span>
+          <span class="stats-live mono accent-cyan" id="statsLiveDot">● LIVE</span>
+        </div>
+        <div class="pulse-metrics-grid">
+          <div class="stats-metrics">
+            <div class="stat-metric">
+              <span class="stat-label">TET / USDC index</span>
+              <span class="stat-num accent-gold" id="valPrice">—</span>
+            </div>
+          </div>
+          <div class="stats-metrics">
+            <div class="stat-metric">
+              <span class="stat-label">Burn rate</span>
+              <span class="stat-num" id="valBurn">—</span>
+            </div>
+          </div>
+          <div class="stats-metrics">
+            <div class="stat-metric">
+              <span class="stat-label">Workers <span style="font-weight:400;color:var(--muted);letter-spacing:0.05em;font-size:9px">(≤60s)</span></span>
+              <span class="stat-num" id="netWorkers">—</span>
+            </div>
+          </div>
+          <div class="stats-metrics">
+            <div class="stat-metric">
+              <span class="stat-label">Community pool</span>
+              <span class="stat-num" id="netCommunity">—</span>
+            </div>
+          </div>
+          <div class="stats-metrics">
+            <div class="stat-metric">
+              <span class="stat-label">Cumulative burn</span>
+              <span class="stat-num" id="netBurn">—</span>
+            </div>
+          </div>
+        </div>
+        <p class="hint mono" style="margin-top: 14px; margin-bottom: 0; font-size: 11px;">Live headcount = unique workers with a heartbeat in the last 60s · <span class="accent-cyan">tet-worker heartbeat</span></p>
+      </section>
+          </div>
+      <details class="adv" style="margin-top: 20px;">
+        <summary>Diagnostics</summary>
+        <div class="kv">
+          <span>FeeΣ <b id="fee">—</b></span>
+          <span>SupplyΣ <b id="sup">—</b></span>
+          <span>Wallet <b id="peer">—</b></span>
+        </div>
+        <div class="burn-metric">
+          <div class="burn-label">Cumulative supply reduction (burn)</div>
+          <div class="burn-value" id="burnDiag">—</div>
+        </div>
+        <div class="kv" style="margin-top: 10px;">
+          <span class="pill" title="TET Quantum Shield: ML-DSA-44 post-quantum hybrid signature verification status."><span class="dot" id="pqcDot"></span> <span id="quantumShield">PQC</span></span>
+          <span class="pill" title="Hardware Attested: status of Intel SGX/TPM hardware verification enforcement."><span class="dot" id="attDot"></span> <span id="hardwareAttested">Attest</span></span>
+          <span class="pill" title="Signer: connection status to the secure wallet module (tet-signer)."><span class="dot" id="linkDot"></span> <span id="hardwareSecured">Signer</span></span>
+      </div>
+        <p class="hint mono" style="margin-top: 12px; margin-bottom: 0; font-size: 11px;">
+          PQC = ML-DSA-44 hybrid signatures · Hardware Attested = SGX/TPM verification gate · Signer = local secure signer link.
+        </p>
+      </details>
+        <div class="card terminal-desk">
+          <div class="terminal-chart-stage">
+            <div id="proChart" style="width:100%; height:280px; display:none;"></div>
+            <canvas id="chartTflops" width="720" height="260" aria-label="Network TFLOPS (ledger-backed)"></canvas>
+            <div class="chart-axis-label-x mono" id="chartXAxisLabel" style="margin-top: 8px; color: var(--muted);">—</div>
+          </div>
+          <div class="terminal-kpi-row">
+            <div>
+              <span class="stat-label">TFLOPS</span>
+              <span id="valTflops" class="mono terminal-kpi-num accent-cyan">—</span>
+            </div>
+            <div>
+              <span class="stat-label">TET / USDC index</span>
+              <span id="terminalTetUsdcBig" class="mono terminal-kpi-num accent-gold">—</span>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>AI Worker</h3>
+          <p class="hint">Session earnings reflect your on-ledger balance delta while heartbeat is active.</p>
+          <p class="mono accent-gold" id="sessionEarningsLine" style="font-size: 16px; font-weight: 600; margin: 8px 0 4px; font-variant-numeric: tabular-nums;">Session earnings: +0.00000000 TET</p>
+          <button type="button" class="primary" id="btnStartEarn" style="margin-top: 8px">Start earning</button>
+          <div class="msg" id="earnMsg"></div>
+        </div>
+        </div>
+      </div>
+      </section>
+
+      <section id="pane-market" class="pane" role="tabpanel" aria-labelledby="tabMarket">
+        <div class="sector">
+          <div class="sectorHead">[ SECTOR_04: MARKET ]</div>
+        <div class="market-grid">
+          <div class="market-left">
+            <div class="card market-metrics">
+              <h3 style="margin-bottom: 6px;">Market</h3>
+              <p class="hint" style="margin-bottom: 0;">Institutional-grade execution surface. Display-only formatting is Wall Street-grade.</p>
+              <div class="metric-grid">
+                <div class="metric">
+                  <div class="k">TET / USDC</div>
+                  <div class="v accent" id="marketTetUsdLine">$—</div>
+                </div>
+                <div class="metric">
+                  <div class="k">Total supply</div>
+                  <div class="v" id="mktSupply">—</div>
+                </div>
+                <div class="metric">
+                  <div class="k">Total burned</div>
+                  <div class="v" id="mktBurn">—</div>
+                </div>
+                <div class="metric">
+                  <div class="k">Active workers</div>
+                  <div class="v" id="mktWorkers">—</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card" id="genesisAirdropCard">
+              <h3 style="margin-bottom: 6px;">GENESIS AIRDROP</h3>
+              <p class="hint" style="margin-bottom: 10px;">First 10,000 users can claim <b class="accent-gold mono">10,000 TET</b> for free.</p>
+              <div class="kv" style="margin-top: 8px;">
+                <span class="mono" id="genesisCountLine">Genesis Slots Claimed: [ — / 10,000 ]</span>
+              </div>
+              <div style="margin-top: 10px; border: 1px solid var(--line); background: #000; padding: 10px; border-radius: 2px;">
+                <div style="height: 10px; background: rgba(212,196,168,0.12); border: 1px solid rgba(212,196,168,0.18);">
+                  <div id="genesisBarFill" style="height: 10px; width: 0%; background: linear-gradient(90deg, rgba(6,182,212,0.65), rgba(212,196,168,0.85));"></div>
+                </div>
+              </div>
+              <button type="button" class="secondary" id="btnGenesisClaimUi" style="margin-top: 14px; width:100%;">Claim 10,000 TET</button>
+              <p class="msg mono" id="genesisClaimMsgUi" style="margin-top: 10px;"></p>
+            </div>
+
+            <div class="card orderbook">
+              <h3 style="margin-bottom: 6px;">Orderbook</h3>
+              <p class="hint" style="margin-bottom: 0;">Depth bars are proportional to remaining size (TET).</p>
+              <div class="ob-grid">
+                <div class="ob-col">
+                  <div class="ob-head"><span>Asks</span><span>Price · Size</span></div>
+                  <div class="ob-rows" id="obAsks"></div>
+                </div>
+                <div class="ob-col">
+                  <div class="ob-head"><span>Bids</span><span>Price · Size</span></div>
+                  <div class="ob-rows" id="obBids"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3 style="margin-bottom: 6px;">My orders</h3>
+              <div id="myOrders"></div>
+              <details class="adv" style="margin-top: 16px;">
+                <summary>Trade history</summary>
+                <div class="kv"><span class="mono">(coming soon)</span></div>
+              </details>
+            </div>
+          </div>
+
+          <div class="market-right">
+            <div class="card trade-panel">
+              <h3 style="margin-bottom: 6px;">Execution</h3>
+              <div class="terminal-price-ribbon" style="margin: 12px 0 16px;">
+                <span class="muted">PRE-SALE &amp; STRATEGIC INVESTMENT</span>
+                <div class="mono" style="margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(239,68,68,0.35); background: rgba(239,68,68,0.10); color: rgba(255,255,255,0.92); font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase;">
+                  DISABLED UNTIL OFFICIAL TGE / LISTING
+                </div>
+                <span class="mono" style="display:block; margin-top: 2px;">
+                  Contributions fund the Network Liquidity Pool to support Worker payouts.
+                </span>
+                <p class="hint mono" style="margin: 10px 0 0; font-size: 11px;">
+                  Solana contribution address will be activated upon official launch. <b>DO NOT</b> send funds until announced on official X.
+                </p>
+                <div class="kv" style="margin-top: 10px;">
+                  <span>Pre-sale price <b class="accent-gold mono">1 TET = 0.05 USDC</b></span>
+                </div>
+                <div class="row" style="margin-top: 12px;">
+                  <input type="number" id="presaleUsdc" min="0" step="0.01" placeholder="Contribute USDC (amount)" disabled />
+                  <button type="button" class="secondary" id="btnConfirmPresale" style="min-width: 200px;" disabled>Confirm contribution</button>
+                </div>
+                <p class="msg mono" id="presaleMsg" style="margin-top: 10px;"></p>
+              </div>
+
+              <div class="mode-row">
+                <button type="button" class="mode active" id="modeBuy">Buy</button>
+                <button type="button" class="mode" id="modeSell">Sell</button>
+              </div>
+              <div id="panelBuy">
+                <p class="swap-label">You spend (USDC)</p>
+                <input type="number" id="swapUsd" min="0" step="0.01" placeholder="0" />
+                <div class="swap-arrow">↓</div>
+                <p class="swap-label">You receive (TET)</p>
+                <div class="preview" id="swapTetOut">—</div>
+                <p class="msg" id="swapHint">Best ask from the book.</p>
+                <div class="trade-actions">
+                  <button type="button" class="primary buy big" id="btnBuy">BUY TET</button>
+                </div>
+                <div class="settle-note slim">
+                  Settlement rail (Solana USDC) will activate at official launch. <b>DO NOT</b> send funds until announced on official X.
+                  <code id="buySolanaAddr">—</code>
+                </div>
+              </div>
+              <div id="panelSell" style="display: none">
+                <p class="swap-label">TET to list</p>
+                <input type="number" id="sellTet" min="0" step="0.0001" placeholder="0" />
+                <p class="swap-label" style="margin-top:12px">Limit (USDC per 1 TET)</p>
+                <input type="number" id="sellUsdPerTet" min="0" step="0.000001" placeholder="0" />
+                <p class="msg" id="sellHint">Escrows TET until filled or cancelled.</p>
+                <div class="trade-actions">
+                  <button type="button" class="primary sell big" id="btnSell">SELL TET</button>
+                </div>
+              </div>
+              <div class="msg" id="marketMsg"></div>
+            </div>
+          </div>
+        </div>
+        </div>
+      </section>
+
+      <section id="pane-vision" class="pane" role="tabpanel" aria-labelledby="tabVision">
+        <div class="sector">
+          <div class="sectorHead">[ SECTOR_05: VISION ]</div>
+        <div class="tet-advantage" role="region" aria-label="TET architectural advantages">
+          <p class="tet-advantage-title">Verified stack · investor brief</p>
+          <h2 class="tet-advantage-headline">THE TET ADVANTAGE: A $10B ARCHITECTURE</h2>
+          <div class="tet-advantage-grid">
+            <div class="tet-advantage-card">
+              <span class="ico" aria-hidden="true">◈</span>
+              <h4>Quantum-Immune Security (PQC Ready)</h4>
+              <p>
+                While legacy chains rely on vulnerable elliptic curves, TET utilizes a <strong>hybrid signature</strong> model
+                (<strong>Ed25519 + NIST ML-DSA-44</strong>). It is engineered for resilience against future quantum decryption (Shor-class attacks on ECC).
+              </p>
+            </div>
+            <div class="tet-advantage-card">
+              <span class="ico" aria-hidden="true">◇</span>
+              <h4>Zero-Honeypot Architecture (Pure Non-Custodial)</h4>
+              <p>
+                We hold no keys. Wallets are strictly client-side, encrypted locally using <strong>Argon2id + AES-256-GCM</strong>. A server breach yields zero funds.
+              </p>
+            </div>
+            <div class="tet-advantage-card">
+              <span class="ico" aria-hidden="true">▣</span>
+              <h4>Atomic Ledger &amp; Replay Immunity</h4>
+              <p>
+                Built on <strong>Rust</strong>, every state change is strictly atomic. <strong>Nonce-based hybrid signatures</strong> make double-spend and replay attacks structurally impossible at the verification layer.
+              </p>
+            </div>
+            <div class="tet-advantage-card">
+              <span class="ico" aria-hidden="true">✦</span>
+              <h4>Hyper-Deflationary AI Compute</h4>
+              <p>
+                TET is not a meme; it is the fuel for decentralized AI. Every prompt sent through the network <strong>burns</strong> a micro-fraction of TET, driving scarcity against a <strong>hard-capped 10B</strong> supply.
+              </p>
+            </div>
+          </div>
+          <button type="button" class="devdocs-link" id="btnDevDocs">[ &lt;/&gt; Developer API &amp; CLI Miner Docs ]</button>
+        </div>
+        <header class="hero" id="vision-landing" style="margin-bottom:20px">
+          <p class="hero-kicker">Nexus Network · TET</p>
+          <h1 class="hero-title">Tradable energy. Intelligence without the middleman.</h1>
+          <p class="hero-lede">
+            TET is a post-quantum, hardware-rooted network for real AI work: you own the keys, the compute, and the economics.
+            No bank password — your recovery phrase and device are the gate.
+          </p>
+          <p class="hero-bridge">Built for Genesis Guardians who believe AI should escape walled gardens.</p>
+        </header>
+        <div class="card">
+          <span class="vision-section-label">Genesis manifesto</span>
+          <h3 style="margin: 0 0 12px; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; color: var(--accent);">The fusion of physics and intelligence</h3>
+          <p class="hint" style="margin-bottom: 14px;">Founding story and protocol intent — save offline if you mirror this text.</p>
+          <div id="manifesto" class="manifesto-body mono">
+<strong class="highlight">TET GENESIS MANIFESTO</strong>
+
+1. What is TET (Tradable Energy Token)?
+TET is not just a cryptocurrency. It is an "Energy Currency" for the direct exchange of "AI Computational Power"—the most valuable resource of the modern age. The base unit of this network is the "stevemon". No central banks, no passwords. Your biometrics and your device’s physical hardware chip are the only master keys to this wealth.
+
+2. How does the system work?
+The moment you input a prompt and scan your fingerprint, the TET network ignites. Military-grade Post-Quantum Cryptography (Dilithium) protects your request, consuming TET as energy to pull instant insights from the world’s most advanced AI models. Your assets and your data remain sovereign and unalterable.
+
+3. How will TET evolve? (The Ultimate Goal)
+TET is currently in "Phase 1". To provide the fastest AI experience, we are temporarily bridging to external engines like OpenAI. However, our true goal is the "Complete Liberation of AI from Megacorporations". In Phase 2, the network will disconnect from external providers. By pooling the idle computational power of millions of users, the TET network will evolve into a single, massive, decentralized AI.
+
+4. What is required?
+The existence of you—the first 10,000 "Genesis Guardians". To transition to a fully decentralized network, we need a solid foundation. Your role is to prove this absolute security and, in the future, contribute your hardware's surplus power. This 10,000 TET is not just a gift. It is proof of your status as a founding member of a new energy economy.
+
+Welcome to the TET Empire. You are the future of energy.
+Founder: Steve
+            </div>
+        </div>
+
+        <div class="card">
+          <span class="vision-section-label">Protocol · Whitepaper</span>
+          <h3 style="margin: 0 0 8px; font-size: 18px; font-weight: 600; color: var(--accent);">Why this network exists</h3>
+          <p class="wp-lede">Protocol intent and operator-grade disclosure — concise by design.</p>
+          <article class="wp">
+            <h2>The vision</h2>
+            <p>
+              We believe artificial intelligence should not live behind a handful of walled gardens.
+              Tradable Energy Token aligns economic incentives so compute becomes a distributed network:
+              independent operators contribute capacity, users pay in TET for real work, and surplus value
+              flows back to contributors — weakening extractive concentration and widening who can participate in the AI economy.
+            </p>
+            <h2>To Our Strategic Partners</h2>
+            <p>
+              We have reserved <strong>20%</strong> of the total supply (<strong>2,000,000,000 TET</strong>) for the Strategic Treasury.
+              These funds are used to ensure network liquidity and stable payouts for the first <strong>10,000 Genesis Guardians</strong>.
+              We invite visionary investors to build the foundation of decentralized AI with us — with an institutional security posture,
+              transparent protocol accounting, and a clear utility-first network design.
+            </p>
+            <h2>How it works</h2>
+            <p>
+              The <strong>utility loop</strong> closes the circuit between demand and reward. Users spend TET for services
+              — for example, sending a prompt through the utility path. The network routes work to participating workers;
+              heartbeat-registered Genesis workers earn from the designated worker pool according to protocol rules.
+              Spend, route, verify, earn — a closed loop designed for transparency and sustained participation.
+            </p>
+            <h2>Quantum security</h2>
+            <p>
+              Settlement and wallet authentication use a <strong>verified hybrid model</strong>: classical <strong>Ed25519</strong> plus
+              <strong>NIST ML-DSA-44</strong> on shared canonical payloads, so identities remain credible even if large-scale quantum adversaries
+              threaten elliptic-curve assumptions alone.
+            </p>
+            <h2>Technical deep dive</h2>
+            <p>For investigators, partners, and integrators who need diagrams, assumptions, and extended architecture:</p>
+            <a
+              class="wp-ext"
+              href="https://github.com/Nexus-Network-Foundation/Nexus-whitepaper/blob/main/Nexus_Network_White%20paper_v1.0.pdf"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Read the Extended Technical Architecture (PDF)</a>
+          </article>
+        </div>
+
+        <p class="vision-cta">
+          <button type="button" class="secondary" id="btnGotoVault">Open Vault →</button>
+        </p>
+
+        <div class="card">
+          <h3>Genesis Guardian</h3>
+          <p class="hint">Requires <b>tet-signer serve</b> (Touch ID / Face ID). Enroll when you are ready.</p>
+            <div class="row">
+            <button type="button" class="secondary" id="secureWallet">Secure wallet</button>
+            <button type="button" class="secondary" id="refreshGuardian">Refresh</button>
+            </div>
+            <div class="msg mono" id="gmsg"></div>
+          <div class="celebrate mono" id="celebrate" style="display: none;">
+            <b>Genesis Guardian unlocked.</b>
+          </div>
+          <textarea class="mono" id="cert" placeholder="Certificate (JSON)…" readonly style="margin-top: 12px; min-height: 72px;"></textarea>
+        </div>
+        <div class="card">
+          <h3>Diamond Hands Vault</h3>
+          <p class="hint">Lock your TET in the Vault to maintain Genesis status and earn higher network yields. Unstaking takes 7 days.</p>
+          <div class="row">
+            <input type="number" id="stakeTet" min="0" step="0.0001" placeholder="Amount to lock (TET)" />
+            <button type="button" class="secondary" id="btnStakeMock" style="min-width: 160px;">Lock / Stake</button>
+          </div>
+          <p class="msg mono" id="stakeMsg" style="margin-top: 10px;">Stake status: (UI only — coming soon)</p>
+        </div>
+
+        <div class="card">
+          <h3>Institutional &amp; Strategic Partnerships</h3>
+          <p class="hint">
+            For treasury, liquidity programs, and compute partnerships, contact the foundation team with your operator profile and desired allocation structure.
+          </p>
+          <p class="msg mono" style="margin-top: 8px;">
+            Include: (1) org name, (2) jurisdiction, (3) expected compute capacity, (4) desired settlement rails.
+          </p>
+        </div>
+        <div class="modal-backdrop" id="devDocsModal" aria-hidden="true">
+        <div class="modal" role="dialog" aria-modal="true" aria-label="Developer docs">
+          <div class="modal-head">
+            <div>
+              <h3 class="modal-title">Running a Heavy Worker Node (CLI)</h3>
+              <p class="modal-sub">
+                For enterprise compute providers and developers, TET allows direct P2P network participation via the Rust CLI.
+              </p>
+            </div>
+            <button type="button" class="modal-close" id="btnDevDocsClose">Close</button>
+          </div>
+          <div class="modal-body">
+            <div class="doc-step"><b>Step 1:</b> Clone the repository.</div>
+            <div class="codeblock">
+              <button type="button" class="copy-btn" data-copy="git-clone">Copy</button>
+              <pre id="codeGitClone">git clone &lt;REPO_URL&gt;\ncd \"Nexus Network/tet-core\"</pre>
+            </div>
+            <div class="doc-step" style="margin-top:16px"><b>Step 2:</b> Configure your <code class="mono">TET_API_KEY</code> (if required for legacy bypass) or ensure your wallet is active.</div>
+            <div class="codeblock">
+              <button type="button" class="copy-btn" data-copy="api-key">Copy</button>
+              <pre id="codeApiKey">export TET_API_KEY=\"YOUR_KEY\"</pre>
+            </div>
+            <div class="doc-step" style="margin-top:16px"><b>Step 3:</b> Run the production engine.</div>
+            <div class="codeblock">
+              <button type="button" class="copy-btn" data-copy="run-core">Copy</button>
+              <pre id="codeRunCore">cargo run --release --bin TET-Core</pre>
+            </div>
+            <p class="modal-sub" style="margin-top:16px">
+              CLI workers process heavy ML/AI tasks and earn maximum TET routing/compute fees.
+            </p>
+          </div>
+        </div>
+      </div>
+        </div>
+      </section>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <script src="/assets/wallet_client_bundled.js?v=genesis_v3"></script>
+    <script src="/assets/ui.js?v=genesis_v3" defer></script>
+  </body>
+</html>

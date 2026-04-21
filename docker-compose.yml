@@ -1,0 +1,31 @@
+services:
+  tet-core:
+    build: .
+    ports:
+      - "5010:5010"
+    environment:
+      # Persist DB on the host (sled dir)
+      - TET_DB_DIR=/app/tet.db
+      # Production hardening (recommended on GCP)
+      # - TET_PROD=true
+      # - TET_DB_KEY_B64=YOUR_32_BYTE_BASE64_KEY_HERE
+      # If not set, server will default price to pre-sale ($0.05) for UI/chart sync
+      # - TET_USD_PER_TET=0.05
+      # Optional API key for founder/genesis/admin operations
+      # - TET_API_KEY=change-me
+    volumes:
+      - ./tet_data:/app/tet.db
+
+  # Placeholder reverse proxy for future SSL / domain routing (Caddy/Nginx).
+  # reverse-proxy:
+  #   image: caddy:2
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #   depends_on:
+  #     - tet-core
+
+volumes: {}
+

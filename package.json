@@ -1,0 +1,23 @@
+{
+  "name": "tet-core",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build-wallet-client": "npx esbuild scripts/wallet_client_entry.mjs --bundle --minify --format=iife --platform=browser --legal-comments=none --outfile=src/wallet_client_bundled.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@noble/ed25519": "^2.2.3",
+    "@noble/hashes": "^1.7.1",
+    "@noble/post-quantum": "^0.6.1",
+    "@scure/bip39": "^1.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

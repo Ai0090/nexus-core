@@ -1,0 +1,60 @@
+[package]
+name = "tet-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+tower-http = { version = "0.6", features = ["cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+bip39 = "2"
+sled = "0.34"
+aes-gcm = "0.10"
+zeroize = "1.8"
+sysinfo = "0.38"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+ring = "0.17"
+security-framework = { version = "3", features = ["OSX_10_15"] }
+security-framework-sys = "2"
+mac_address = "1.1"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+
+libp2p = { version = "0.55", features = ["tcp", "dns", "noise", "yamux", "kad", "gossipsub", "request-response", "tokio", "macros"] }
+futures = "0.3"
+rand_core = "0.6"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+ureq = { version = "2.12", default-features = false, features = ["json"] }
+rand_chacha = "0.3"
+dilithium-rs = { version = "0.2", default-features = false }
+candle-core = "0.10.2"
+candle-transformers = "0.10.2"
+hf-hub = "0.5.0"
+tokenizers = "0.22.2"
+anyhow = "1.0.102"
+once_cell = "1"
+
+[dev-dependencies]
+proptest = "1.6"
+tempfile = "3"
+once_cell = "1"
+
+[[bin]]
+name = "TET-Core"
+path = "src/main.rs"
+
+[[bin]]
+name = "TET-Signer"
+path = "src/bin/tet-signer.rs"
+
+[[bin]]
+name = "TET-Worker-App"
+path = "src/bin/tet-worker.rs"
+
