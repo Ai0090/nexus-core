@@ -357,6 +357,12 @@ function showObStep(stepId) {
 
 function startMainAppLoop() {
   if (__tetAppStarted) return;
+  // Strict guard: do not allow entering the dashboard without a wallet id.
+  if (!getCurrentWalletId()) {
+    console.warn("[TET] Missing tet-wallet-id. Redirecting to landing page for secure login/restore.");
+    window.location.href = "/";
+    return;
+  }
   __tetAppStarted = true;
   const modelEl = document.getElementById("model");
   if (modelEl && !modelEl.value) modelEl.value = "llama3";

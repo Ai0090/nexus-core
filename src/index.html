@@ -53,6 +53,10 @@
         letter-spacing: 0.02em;
       }
       .cmd:hover { background: #111; }
+      .cmd.secondary { color: var(--muted); border-color: var(--muted); }
+      .cmd.secondary:hover { background: #0b0b0b; color: var(--fg); border-color: var(--fg); }
+      .cmd.danger { color: #ff6666; border-color: #ff6666; }
+      .cmd.danger:hover { background: #ff6666; color: #000; }
       .block {
         margin-top: 14px;
         border: 1px solid var(--line);
@@ -86,6 +90,47 @@
         border-top: 1px solid var(--line);
         padding-top: 12px;
       }
+      .modal {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.78);
+        padding: 18px;
+        z-index: 9999;
+        pointer-events: none; /* critical: never block clicks when hidden */
+      }
+      .modal.active { display: flex; pointer-events: auto; }
+      .modalCard {
+        width: min(760px, 100%);
+        border: 1px solid var(--line);
+        background: #000;
+        padding: 14px 12px;
+      }
+      .modalHead {
+        font-weight: 900;
+        letter-spacing: 0.10em;
+        text-transform: uppercase;
+      }
+      .modalSub { color: var(--muted); margin-top: 8px; font-size: 12px; }
+      .field {
+        margin-top: 12px;
+        border: 1px solid var(--line);
+        background: #000;
+        color: var(--fg);
+        width: 100%;
+        padding: 10px 10px;
+        font-family: inherit;
+        font-size: 13px;
+        line-height: 1.4;
+        outline: none;
+      }
+      .field:focus { border-color: var(--fg); }
+      .modalActions { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+      .msg { margin-top: 10px; color: var(--muted); font-size: 12px; }
+      .msg.err { color: #ff6666; }
+      .hint { color: var(--dim); font-size: 11px; margin-top: 10px; }
       @media (max-width: 640px) {
         body { font-size: 13px; }
         pre { font-size: 12px; }
@@ -100,7 +145,11 @@
           POST_QUANTUM_DEPIN · REAL_WORKER_NODES · CRYPTO_BOUND_ROUTING · MICRO_TET_ACCOUNTING · ATTESTATION_OPTIONAL
         </div>
         <div class="row" aria-label="Primary actions">
-          <a class="cmd" href="/app">[ &gt; LOGIN / CONNECT_WALLET ]</a>
+          <a class="cmd" id="btnMainCta" href="/app">[ &gt; LOGIN / CONNECT_WALLET ]</a>
+        </div>
+        <div class="row" aria-label="Login paths" id="loginPaths">
+          <a class="cmd secondary" id="btnInitNew" href="/app">[ &gt; INITIALIZE_NEW_GENESIS_NODE ]</a>
+          <a class="cmd secondary" id="btnRestore" href="#restore">[ &gt; RESTORE_EXISTING_COMMANDER_SESSION ]</a>
         </div>
       </div>
 
@@ -171,5 +220,140 @@ console.log(await tet.inference({
         Any transfer/trade before official listing is at your own risk. No guarantees of listings, price, or returns.
       </div>
     </div>
+
+    <!-- Hardcore terminal restore modal -->
+    <div class="modal" id="restoreModal" role="dialog" aria-modal="true" aria-label="Restore commander session">
+      <div class="modalCard">
+        <div class="modalHead">[ RESTORE_EXISTING_COMMANDER_SESSION ]</div>
+        <div class="modalSub">
+          Paste your 12-word recovery mnemonic. It is verified locally. The server never becomes your wallet.
+        </div>
+        <textarea class="field" id="restoreMnemonic" rows="4" placeholder="twelve words separated by spaces"></textarea>
+        <div class="modalActions">
+          <button class="cmd" id="btnRestoreSubmit" type="button">[ &gt; VERIFY_AND_LOGIN ]</button>
+          <button class="cmd danger" id="btnRestoreCancel" type="button">[ X CLOSE ]</button>
+        </div>
+        <div class="msg" id="restoreMsg">Awaiting mnemonic…</div>
+        <div class="hint">
+          Session persistence: we store only your public Wallet ID (`tet-wallet-id`) to resume quickly. Your mnemonic is not transmitted.
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        const LS_WALLET_ID_KEY = "tet-wallet-id";
+
+        function cleanMnemonic(rawInput) {
+          return String(rawInput ?? "")
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, " ");
+        }
+
+        function getWalletIdLs() {
+          return String(localStorage.getItem(LS_WALLET_ID_KEY) || "").trim().toLowerCase();
+        }
+
+        function setWalletIdLs(wid) {
+          const w = String(wid || "").trim().toLowerCase();
+          if (w && w.length === 64) localStorage.setItem(LS_WALLET_ID_KEY, w);
+        }
+
+        function hasValidWalletId() {
+          const w = getWalletIdLs();
+          return w.length === 64 && /^[0-9a-f]+$/.test(w);
+        }
+
+        async function loadWalletClient() {
+          if (window.tetWalletClient) return;
+          await new Promise((res, rej) => {
+            const s = document.createElement("script");
+            s.src = "/assets/wallet_client_bundled.js?v=genesis_v3";
+            s.async = true;
+            s.onload = () => res();
+            s.onerror = () => rej(new Error("Could not load wallet client bundle."));
+            document.head.appendChild(s);
+          });
+          if (!window.tetWalletClient) throw new Error("wallet client not available");
+        }
+
+        function openRestore() {
+          const m = document.getElementById("restoreModal");
+          const ta = document.getElementById("restoreMnemonic");
+          const msg = document.getElementById("restoreMsg");
+          if (msg) { msg.textContent = "Awaiting mnemonic…"; msg.className = "msg"; }
+          if (m) m.classList.add("active");
+          if (ta) setTimeout(() => ta.focus(), 0);
+        }
+
+        function closeRestore() {
+          const m = document.getElementById("restoreModal");
+          const ta = document.getElementById("restoreMnemonic");
+          if (m) m.classList.remove("active");
+          if (ta) ta.value = "";
+        }
+
+        function syncResumeUi() {
+          const main = document.getElementById("btnMainCta");
+          const paths = document.getElementById("loginPaths");
+          if (!main) return;
+          if (hasValidWalletId()) {
+            main.textContent = "[ > RESUME_SESSION : GO_TO_DASHBOARD ]";
+            main.href = "/app";
+            if (paths) paths.style.display = "none";
+          } else {
+            main.textContent = "[ > LOGIN / CONNECT_WALLET ]";
+            main.href = "/app";
+            if (paths) paths.style.display = "";
+          }
+        }
+
+        async function verifyAndLogin() {
+          const msg = document.getElementById("restoreMsg");
+          const ta = document.getElementById("restoreMnemonic");
+          const raw = ta ? ta.value : "";
+          const phrase = cleanMnemonic(raw);
+          if (msg) { msg.textContent = "Verifying…"; msg.className = "msg"; }
+          try {
+            await loadWalletClient();
+            if (!phrase) throw new Error("Mnemonic required.");
+            const words = phrase.split(" ").filter(Boolean);
+            if (words.length !== 12) throw new Error(`Expected 12 words. Got ${words.length}.`);
+            if (!window.tetWalletClient.validateMnemonicPhrase(phrase)) {
+              throw new Error("Invalid BIP39 mnemonic.");
+            }
+            const wid = String(window.tetWalletClient.tetWalletIdFromMnemonic(phrase) || "").trim().toLowerCase();
+            if (!wid || wid.length !== 64 || !/^[0-9a-f]+$/.test(wid)) {
+              throw new Error("Failed to derive Wallet ID.");
+            }
+            setWalletIdLs(wid);
+            if (msg) { msg.textContent = `OK. WALLET_ID=${wid}`; msg.className = "msg"; }
+            window.location.href = "/app";
+          } catch (e) {
+            const t = String((e && e.message) ? e.message : e);
+            if (msg) { msg.textContent = `ERROR: ${t}`; msg.className = "msg err"; }
+          }
+        }
+
+        // Wire UI
+        const restoreBtn = document.getElementById("btnRestore");
+        if (restoreBtn) restoreBtn.addEventListener("click", (ev) => { ev.preventDefault(); openRestore(); });
+        const cancelBtn = document.getElementById("btnRestoreCancel");
+        if (cancelBtn) cancelBtn.addEventListener("click", (ev) => { ev.preventDefault(); closeRestore(); });
+        const submitBtn = document.getElementById("btnRestoreSubmit");
+        if (submitBtn) submitBtn.addEventListener("click", (ev) => { ev.preventDefault(); verifyAndLogin().catch(() => {}); });
+
+        // Escape closes
+        document.addEventListener("keydown", (ev) => {
+          if (ev.key === "Escape") closeRestore();
+        });
+
+        // Support deep link `#restore`
+        if (window.location.hash === "#restore") openRestore();
+
+        syncResumeUi();
+      })();
+    </script>
   </body>
 </html>
