@@ -7,15 +7,22 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-pub fn hardware_id_sha256_hex_best_effort() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub fn hardware_id_sha256_hex_best_effort()
+-> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Collect physical-ish identifiers (best-effort). No UUIDs.
     let mut parts = Vec::new();
     if let Some(ma) = mac_address::get_mac_address()? {
         parts.push(format!("mac={ma}"));
     }
     let _sys = sysinfo::System::new_all();
-    parts.push(format!("host={}", sysinfo::System::host_name().unwrap_or_default()));
-    parts.push(format!("os={}", sysinfo::System::os_version().unwrap_or_default()));
+    parts.push(format!(
+        "host={}",
+        sysinfo::System::host_name().unwrap_or_default()
+    ));
+    parts.push(format!(
+        "os={}",
+        sysinfo::System::os_version().unwrap_or_default()
+    ));
     parts.push(format!(
         "kernel={}",
         sysinfo::System::kernel_version().unwrap_or_default()

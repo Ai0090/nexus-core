@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+
+mod ai_filter;
 mod ai_proxy;
 mod attestation;
 mod chaos;
@@ -7,40 +10,142 @@ mod executor;
 mod invariant_tests;
 mod ledger;
 mod marketplace;
+mod models;
 mod network;
+mod onchain;
 mod oracle;
+mod p2p;
 mod p2p_dex;
+mod p2p_network;
 mod protocol;
 mod quantum_shield;
-mod replication;
 mod render_farm;
+mod replication;
 mod rest;
 mod tee_compute;
 mod updater;
+mod vision;
 mod wallet;
-mod worker_network;
 mod worker_ai;
+mod worker_config;
+mod worker_engine;
+mod worker_network;
+mod zk_verifier;
 
-#[cfg(test)]
-mod tests;
 #[cfg(test)]
 mod test_env;
+#[cfg(test)]
+mod tests;
 
-use crate::ledger::Ledger;
+use crate::ledger::{GENESIS_FOUNDER_DEV_PUBLIC_HEX, Ledger};
 use crate::network::NetworkManager;
 use crate::rest::{HttpRateLimit, RestState, serve};
 use crate::worker_network::WorkerRegistry;
+use base64::Engine as _;
+use methods::NEXUS_GUEST_ID;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex as StdMutex};
+use tokio::sync::broadcast;
+
+type AnyErr = Box<dyn std::error::Error + Send + Sync>;
+
+fn fatal_db_lock_help(db_dir: &str, port: u16, e: &dyn std::error::Error) -> ! {
+    eprintln!();
+    eprintln!("[FATAL] Could not open ledger DB at `{db_dir}`.");
+    eprintln!("[FATAL] {e}");
+    eprintln!();
+    eprintln!(
+        "Most common cause: another TET-Core process is already running and holding the sled lock."
+    );
+    eprintln!();
+    eprintln!("Fix options:");
+    eprintln!("  1) Stop the existing process (recommended). On macOS:");
+    eprintln!("     lsof -nP -iTCP:{port} -sTCP:LISTEN");
+    eprintln!("     kill <PID>");
+    eprintln!();
+    eprintln!("  2) Run a separate sandbox DB (keeps your main ledger intact):");
+    eprintln!("     TET_DB_DIR=tet_sandbox.db cargo run --bin TET-Core");
+    eprintln!();
+    std::process::exit(2);
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn main() -> Result<(), AnyErr> {
+    env_logger::init();
+
+    // Phase 2.5: Node Operator Defense (default SAFE MODE).
+    let safe_mode = crate::worker_config::configure_from_args();
+    if safe_mode {
+        log::info!(
+            "Node started in SAFE MODE. Content filtering is ENABLED to protect the operator."
+        );
+    } else {
+        log::warn!(
+            "Node started in UNSAFE MODE. Content filtering is DISABLED (--unsafe-no-filter)."
+        );
+    }
+    if crate::worker_config::enable_zk_prover() {
+        log::info!("ZK PROVER: ENABLED (Strict Mode Active)");
+    } else {
+        log::info!("ZK PROVER: DISABLED (Optimistic Mode Active)");
+    }
+
+    crate::vision::fluid_net::log_startup_summary();
+    let _caac = crate::vision::caac::profile();
+    log::info!(
+        "[vision][caac] role={:?} fingerprint_prefix={}…",
+        _caac.role,
+        _caac
+            .hw
+            .fingerprint_sha256_hex
+            .chars()
+            .take(12)
+            .collect::<String>()
+    );
+
+    // Phase 1.3.1: Keygen CLI for E2E scripts.
+    // Usage: `RISC0_SKIP_BUILD=1 cargo run --quiet --bin TET-Core -- --keygen`
+    if std::env::args().any(|a| a == "--keygen") {
+        use pqcrypto_kyber::kyber768;
+        use pqcrypto_traits::kem::{PublicKey as _, SecretKey as _};
+        use x25519_dalek::{PublicKey, StaticSecret};
+
+        let x_sk = StaticSecret::random_from_rng(rand_core::OsRng);
+        let x_pk = PublicKey::from(&x_sk);
+        let (k_pk, k_sk) = kyber768::keypair();
+
+        println!(
+            "export GEN_X25519_SK=\"{}\"",
+            base64::engine::general_purpose::STANDARD.encode(x_sk.to_bytes())
+        );
+        println!(
+            "export GEN_X25519_PK=\"{}\"",
+            base64::engine::general_purpose::STANDARD.encode(x_pk.as_bytes())
+        );
+        println!(
+            "export GEN_MLKEM_SK=\"{}\"",
+            base64::engine::general_purpose::STANDARD.encode(k_sk.as_bytes())
+        );
+        println!(
+            "export GEN_MLKEM_PK=\"{}\"",
+            base64::engine::general_purpose::STANDARD.encode(k_pk.as_bytes())
+        );
+        return Ok(());
+    }
+
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(5010);
     // Chaos tester mode (anti-fragility).
     // Usage: `TET-Core chaos-sim` (no server).
     if std::env::args().any(|a| a == "chaos-sim") {
         let r = crate::chaos::simulate_reroute(20_000, 1_000, 500);
         if !r.ok_no_loss {
-            return Err("chaos-sim failed: shard loss detected".into());
+            let err: AnyErr = Box::new(std::io::Error::other(
+                "chaos-sim failed: shard loss detected",
+            ));
+            return Err(err);
         }
         println!(
             "CHAOS_SIM_OK workers_total={} workers_online_after={} shards_total={} rerouted_shards={}",
@@ -48,10 +153,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         );
         return Ok(());
     }
-    let db_dir = std::env::var("TET_DB_DIR")
+    let db_dir_base = std::env::var("TET_DB_DIR")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "tet.db".to_string());
+    // Local testnet: avoid sled lock collisions on a single host.
+    // If the operator didn't specify a DB dir explicitly, namespace it by PORT.
+    let db_dir = if std::env::var("TET_DB_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_some()
+    {
+        db_dir_base.clone()
+    } else {
+        format!("{db_dir_base}_{port}")
+    };
     let initial_wallet = std::env::var("TET_WALLET_ID")
         .ok()
         .filter(|s| !s.is_empty())
@@ -74,6 +190,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .as_deref()
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
+
+    // CRITICAL: never boot "prod" with a zero guest ID (happens when RISC0_SKIP_BUILD=1 stubs methods).
+    if is_prod && NEXUS_GUEST_ID == [0u32; 8] {
+        panic!("CRITICAL: ZK Guest ID is zero. Refusing to boot in production mode.");
+    }
     if is_prod {
         let encrypt_mode = std::env::var("TET_DB_ENCRYPT")
             .ok()
@@ -92,13 +213,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .filter(|s| !s.trim().is_empty())
                 .is_some();
         if !has_key {
-            eprintln!("[FATAL] Production mode requires an encryption key: set TET_DB_KEY_B64 (preferred) or TET_DB_KEY.");
+            eprintln!(
+                "[FATAL] Production mode requires an encryption key: set TET_DB_KEY_B64 (preferred) or TET_DB_KEY."
+            );
             std::process::exit(2);
         }
     }
 
-    let ledger = Arc::new(Ledger::open(&db_dir)?);
+    if let Err(e) =
+        tet_core::pqc_keystore::ensure_node_mldsa_keystore(std::path::Path::new(&db_dir))
+    {
+        log::warn!("ML-DSA node keystore: {e}");
+    } else {
+        log::info!("ML-DSA node keystore ready under `{db_dir}`");
+    }
+
+    let ledger = match Ledger::open(&db_dir) {
+        Ok(l) => Arc::new(l),
+        Err(e) => {
+            let msg = format!("{e}");
+            if msg.contains("could not acquire lock on")
+                || msg.contains("Resource temporarily unavailable")
+                || msg.contains("WouldBlock")
+            {
+                fatal_db_lock_help(&db_dir, port, &e);
+            }
+            // LedgerError may not be Send+Sync; return a portable error type.
+            let err: AnyErr = Box::new(std::io::Error::other(msg));
+            return Err(err);
+        }
+    };
     ledger.init_genesis_founder_premine_from_env()?;
+
+    // MVP tokenomics bootstrap: if ledger is empty, apply genesis to the Sovereign OS founder wallet
+    // (`//Ferdie` pubkey hex). Must stay in sync with tet-network OsClient `FOUNDER_SIGNING_URI`.
+    {
+        let founder_wallet_id = std::env::var("TET_GENESIS_FOUNDER_WALLET_ID")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_ascii_lowercase())
+            .unwrap_or_else(|| GENESIS_FOUNDER_DEV_PUBLIC_HEX.to_string());
+        let supply0 = ledger.total_supply_micro().unwrap_or(0);
+        if supply0 == 0 {
+            let s = ledger
+                .apply_genesis_allocation(&founder_wallet_id)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "[ledger] FATAL: auto genesis (big bang) failed with supply unset/0: {e}"
+                    )
+                });
+            log::info!(
+                "[ledger] auto genesis OK founder={} total_supply_micro={}",
+                s.founder_wallet_id,
+                s.total_supply_micro
+            );
+        }
+    }
+
+    // Phase 1.1: Dev/test faucet for E2E loops (avoids "insufficient funds").
+    // Guardrails:
+    // - Disabled in prod/mainnet mode.
+    // - Amount is explicit via env.
+    if !is_prod
+        && let Ok(v) = std::env::var("TET_DEV_FAUCET_MICRO")
+        && let Ok(micro) = v.trim().parse::<u64>()
+        && micro > 0
+    {
+        let payload = format!("dev_faucet|wallet={initial_wallet}|micro={micro}").into_bytes();
+        match ledger.mint_reward_with_proof(&initial_wallet, micro, &payload, None, false) {
+            Ok((_gross, net, _fee, _proof_id)) => {
+                eprintln!(
+                    "[dev] faucet credited micro={} (net={}) wallet={}",
+                    micro, net, initial_wallet
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "[dev] faucet failed micro={} wallet={} err={}",
+                    micro, initial_wallet, e
+                );
+            }
+        }
+    }
 
     // Optional P2P mesh (can be disabled for local demos).
     let enable_p2p = std::env::var("TET_ENABLE_P2P")
@@ -120,10 +316,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         None
     };
 
+    // Phase 1/2 TET P2P engine (Gossipsub + Kademlia) — additive wiring.
+    // Phase 3.3: On-chain worker registration/stake (localnet).
+    if let Err(e) = crate::onchain::maybe_register_worker_before_p2p() {
+        eprintln!("[onchain][warn] worker register/stake skipped or failed: {e}");
+    }
+
+    let nexus_p2p_client = match crate::p2p_network::start_p2p_node(ledger.clone()) {
+        Ok((c, _jh)) => Some(c),
+        Err(e) => {
+            eprintln!("[p2p][warn] TET P2P engine failed to start: {e}");
+            None
+        }
+    };
+
+    // Phase 0: libp2p local discovery mesh (mDNS + Ping).
+    // Runs behind the HTTP server, listens on tcp/0 (ephemeral), logs PeerId + listen addr.
+    let gossip_tx = if enable_p2p {
+        match crate::p2p::start_mdns_ping_swarm(ledger.clone()) {
+            Ok(tx) => Some(tx),
+            Err(e) => {
+                eprintln!("[p2p][warn] failed to start mdns/ping/gossip swarm: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let bind = std::env::var("TET_REST_BIND")
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "127.0.0.1:5010".to_string());
+        .unwrap_or_else(|| format!("0.0.0.0:{port}"));
     let addr: SocketAddr = bind.parse()?;
 
     let http_rps = std::env::var("TET_HTTP_RPS")
@@ -132,14 +356,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .unwrap_or(25)
         .max(1);
 
+    let (log_tx, _log_rx) = broadcast::channel::<String>(100);
+
     let state = RestState {
         ledger,
+        solana: Arc::new(crate::ledger::solana_client::NexusSolanaClient::devnet()),
         p2p_tx: p2p,
+        p2p_client: nexus_p2p_client,
+        gossip_tx,
+        mempool: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         http_ratelimit: Arc::new(tokio::sync::Mutex::new(HttpRateLimit::new(http_rps))),
         workers: Arc::new(StdMutex::new(WorkerRegistry::default())),
         e2ee_jobs: Arc::new(StdMutex::new(crate::rest::E2eeJobQueue::default())),
         dex: Arc::new(StdMutex::new(crate::p2p_dex::DexEngine::default())),
         genesis_1k_lock: Arc::new(tokio::sync::Mutex::new(())),
+        log_tx,
     };
 
     serve(state, addr).await?;

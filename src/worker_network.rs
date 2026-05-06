@@ -10,8 +10,11 @@ pub struct WorkerEntry {
     pub hardware_id_hex: String,
     pub ed25519_pubkey_hex: String,
     pub x25519_pubkey_b64: Option<String>,
+    pub mlkem_pubkey_b64: Option<String>,
     pub tflops_est: f64,
     pub last_seen_ms: u128,
+    /// CAAC lane after `/v1/vision/caac/complete` (PoC / PoR).
+    pub caac_role: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -27,8 +30,23 @@ pub fn now_ms() -> u128 {
 }
 
 impl WorkerRegistry {
-    pub fn upsert(&mut self, e: WorkerEntry) {
+    pub fn upsert(&mut self, mut e: WorkerEntry) {
+        if let Some(prev) = self.by_wallet.get(&e.wallet)
+            && e.caac_role.is_none()
+        {
+            e.caac_role = prev.caac_role.clone();
+        }
         self.by_wallet.insert(e.wallet.clone(), e);
+    }
+
+    pub fn set_caac_role(&mut self, wallet: &str, role: String) {
+        let w = wallet.trim().to_string();
+        if w.is_empty() {
+            return;
+        }
+        if let Some(ent) = self.by_wallet.get_mut(&w) {
+            ent.caac_role = Some(role);
+        }
     }
 
     pub fn heartbeat(
@@ -37,6 +55,7 @@ impl WorkerRegistry {
         hardware_id_hex: &str,
         ed25519_pubkey_hex: &str,
         x25519_pubkey_b64: Option<&str>,
+        mlkem_pubkey_b64: Option<&str>,
         tflops_est: f64,
     ) -> Result<(), &'static str> {
         let w = wallet.trim();
@@ -51,6 +70,7 @@ impl WorkerRegistry {
         if pk.is_empty() {
             return Err("ed25519_pubkey_hex required");
         }
+        let prev_role = self.by_wallet.get(w).and_then(|p| p.caac_role.clone());
         let e = WorkerEntry {
             wallet: w.to_string(),
             hardware_id_hex: hw.to_string(),
@@ -59,8 +79,13 @@ impl WorkerRegistry {
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string()),
+            mlkem_pubkey_b64: mlkem_pubkey_b64
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
             tflops_est: tflops_est.max(0.0),
             last_seen_ms: now_ms(),
+            caac_role: prev_role,
         };
         self.upsert(e);
         Ok(())
@@ -127,4 +152,12 @@ pub struct NetworkStats {
     /// Pre-sale floor used when pricing the index (env `TET_PRESALE_USD_PER_TET`, default 0.05).
     pub tet_presale_usd: f64,
     pub total_supply_micro: u64,
+    /// Live ledger balance of [`crate::ledger::WALLET_SYSTEM_WORKER_POOL`] (genesis 75% tranche; Stevemon micro).
+    pub system_worker_pool_balance_micro: u64,
+    /// Inference settlement height (logical blocks).
+    pub consensus_block_height: u64,
+    /// Human-readable epoch index (1-based).
+    pub epoch: u64,
+    /// Whether Genesis Epoch reward routing multiplier applies to the next settlement height.
+    pub is_genesis_boost: bool,
 }

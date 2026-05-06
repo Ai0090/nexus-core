@@ -3,7 +3,7 @@ use ed25519_dalek::{Signer as _, SigningKey};
 
 use tet_core::protocol::{AttestationV1, HybridSigV1, SignedTxEnvelopeV1, TxV1};
 
-const STEVEMON: f64 = 100_000_000.0;
+const STEVEMON: f64 = 1_000_000.0;
 
 #[cfg(target_os = "macos")]
 mod macos {
@@ -136,21 +136,21 @@ mod macos {
             other => other,
         };
 
-        if load_secret(svc(), "mldsa44_sk").is_err() {
+        if load_secret(svc(), "mldsa65_sk").is_err() {
             let mut seed = [0u8; 32];
             OsRng.fill_bytes(&mut seed);
-            let kp = dilithium::MlDsaKeyPair::generate_deterministic(dilithium::ML_DSA_44, &seed);
-            let mut opt = PasswordOptions::new_generic_password(svc(), "mldsa44_sk");
+            let kp = dilithium::MlDsaKeyPair::generate_deterministic(dilithium::ML_DSA_65, &seed);
+            let mut opt = PasswordOptions::new_generic_password(svc(), "mldsa65_sk");
             opt.use_protected_keychain();
             opt.set_access_control_options(AccessControlOptions::BIOMETRY_CURRENT_SET);
             security_framework::passwords::set_generic_password_options(kp.private_key(), opt)?;
-            let mut opt2 = PasswordOptions::new_generic_password(svc(), "mldsa44_pk");
+            let mut opt2 = PasswordOptions::new_generic_password(svc(), "mldsa65_pk");
             opt2.use_protected_keychain();
             opt2.set_access_control_options(AccessControlOptions::BIOMETRY_CURRENT_SET);
             security_framework::passwords::set_generic_password_options(kp.public_key(), opt2)?;
         }
-        let mldsa_sk = load_secret(svc(), "mldsa44_sk")?;
-        let mldsa_pk = load_secret(svc(), "mldsa44_pk")?;
+        let mldsa_sk = load_secret(svc(), "mldsa65_sk")?;
+        let mldsa_pk = load_secret(svc(), "mldsa65_pk")?;
 
         let tx_bytes = serde_json::to_vec(&tx)?;
         let ed_sig = signing.sign(&tx_bytes);
@@ -159,11 +159,11 @@ mod macos {
         let kp = dilithium::MlDsaKeyPair::from_keys(
             mldsa_sk.as_slice(),
             mldsa_pk.as_slice(),
-            dilithium::ML_DSA_44,
+            dilithium::ML_DSA_65,
         )
-        .map_err(|_| "invalid mldsa44 key bytes")?;
-        let sig = tet_core::wallet::mldsa44_sign_deterministic(&kp, &tx_bytes)
-            .map_err(|_| "mldsa44 signing failed")?;
+        .map_err(|_| "invalid mldsa65 key bytes")?;
+        let sig = tet_core::wallet::mldsa_sign_deterministic(&kp, &tx_bytes)
+            .map_err(|_| "mldsa65 signing failed")?;
         let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig);
         let mldsa_pk_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_pk.as_slice());
 
@@ -195,7 +195,7 @@ mod macos {
                 ed25519_pubkey_hex: default_wallet_id,
                 ed25519_sig_b64: ed_b64,
                 mldsa_pubkey_b64: mldsa_pk_b64,
-                mldsa_sig_b64: mldsa_sig_b64,
+                mldsa_sig_b64,
             },
             attestation: AttestationV1 {
                 platform: "macos-se".into(),

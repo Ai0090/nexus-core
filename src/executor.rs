@@ -37,7 +37,6 @@ pub trait InferenceExecutor: Send + Sync + 'static {
 }
 
 /// Stub: used until llama.cpp/candle integration is wired into this slim repo snapshot.
-#[allow(dead_code)]
 pub struct StubExecutor;
 
 impl InferenceExecutor for StubExecutor {

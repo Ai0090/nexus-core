@@ -51,6 +51,18 @@ pub enum TxV1 {
         #[serde(default)]
         attestation_required: bool,
     },
+
+    /// Verify a RISC Zero ZK-VM receipt on-chain (Phase 3).
+    ///
+    /// `receipt_b64` uses STANDARD base64 over `bincode`-serialized `risc0_zkvm::Receipt`.
+    /// For local/dev tests, a mock receipt may be supplied with prefix `MOCKJ1:` (see `zk_verifier`).
+    VerifyZkProof {
+        image_id: [u32; 8],
+        /// Public journal bytes (STANDARD base64). For RISC Zero receipts this should match `receipt.journal`.
+        journal_b64: String,
+        /// Receipt bytes (STANDARD base64), or dev-mode mock prefix `MOCKJ1:...`.
+        receipt_b64: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

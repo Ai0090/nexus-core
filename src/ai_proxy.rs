@@ -233,9 +233,7 @@ pub fn handle_ai_proxy(
 ) -> impl IntoResponse {
     let model_trim = req.model.trim().to_string();
     let use_worker_route = {
-        let w = workers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let w = workers.lock().unwrap_or_else(|e| e.into_inner());
         let ttl = std::env::var("TET_WORKER_HEARTBEAT_TTL_MS")
             .ok()
             .and_then(|v| v.parse::<u128>().ok())
@@ -377,9 +375,7 @@ pub fn handle_ai_proxy(
                     .and_then(|v| v.parse::<u128>().ok())
                     .unwrap_or(120_000);
                 let entry = {
-                    let reg = workers
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let reg = workers.lock().unwrap_or_else(|e| e.into_inner());
                     reg.get_by_hardware(proof.hardware_id_hex.trim()).cloned()
                 };
                 let Some(entry) = entry else {
@@ -526,9 +522,11 @@ pub fn utility_playground_response(
             )
                 .into_response()
         }
-        Err(LedgerError::InsufficientFunds) => {
-            (StatusCode::BAD_REQUEST, "insufficient spendable balance (need 1 TET)").into_response()
-        }
+        Err(LedgerError::InsufficientFunds) => (
+            StatusCode::BAD_REQUEST,
+            "insufficient spendable balance (need 1 TET)",
+        )
+            .into_response(),
         Err(LedgerError::AttestationRequired) => (
             StatusCode::FORBIDDEN,
             "wallet transfers require attestation in this environment",

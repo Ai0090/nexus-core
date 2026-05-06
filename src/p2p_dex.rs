@@ -123,6 +123,7 @@ fn stable_id(prefix: &str, maker_wallet: &str, nonce16_hex: &str) -> String {
 /// Matching:
 /// - Orders match only when `side` and `quote_asset` are compatible.
 /// - For simplicity, this engine creates 1 trade per taker fill request (no multi-order sweep).
+#[derive(Default)]
 pub struct DexEngine {
     orders: HashMap<OrderId, Order>,
     trades: HashMap<TradeId, Trade>,
@@ -130,17 +131,6 @@ pub struct DexEngine {
     sell_by_price: BTreeMap<u64, VecDeque<OrderId>>,
     /// Buy book: highest price first (stored by price, but we iterate reverse).
     buy_by_price: BTreeMap<u64, VecDeque<OrderId>>,
-}
-
-impl Default for DexEngine {
-    fn default() -> Self {
-        Self {
-            orders: HashMap::new(),
-            trades: HashMap::new(),
-            sell_by_price: BTreeMap::new(),
-            buy_by_price: BTreeMap::new(),
-        }
-    }
 }
 
 impl DexEngine {
@@ -161,6 +151,7 @@ impl DexEngine {
     }
 
     /// Maker lists an order by escrow-locking `tet_micro_total` into the order escrow wallet.
+    #[allow(clippy::too_many_arguments)]
     pub fn place_maker_order(
         &mut self,
         ledger: &Ledger,
@@ -189,7 +180,9 @@ impl DexEngine {
 
         // Deterministic id seeded by time + maker + size/price.
         let nonce16_hex = {
-            let base = format!("{created_at_ms}|{maker_wallet}|{side:?}|{quote_asset}|{price_quote_per_tet}|{tet_micro_total}");
+            let base = format!(
+                "{created_at_ms}|{maker_wallet}|{side:?}|{quote_asset}|{price_quote_per_tet}|{tet_micro_total}"
+            );
             sha256_hex(base.as_bytes())[..32].to_string()
         };
         let id = stable_id("dex-order-v1", maker_wallet, &nonce16_hex);
@@ -201,7 +194,9 @@ impl DexEngine {
         // Track the *actual* escrow balance (net of protocol fees).
         let escrow_bal = ledger.balance_micro(&escrow_wallet)?;
         if escrow_bal == 0 {
-            return Err(DexError::Invalid("escrow lock resulted in zero balance".into()));
+            return Err(DexError::Invalid(
+                "escrow lock resulted in zero balance".into(),
+            ));
         }
 
         let order = Order {
@@ -236,7 +231,11 @@ impl DexEngine {
         if maker.is_empty() {
             return Err(DexError::Invalid("maker_wallet required".into()));
         }
-        let o = self.orders.get(oid).cloned().ok_or(DexError::OrderNotFound)?;
+        let o = self
+            .orders
+            .get(oid)
+            .cloned()
+            .ok_or(DexError::OrderNotFound)?;
         if o.maker_wallet.trim() != maker {
             return Err(DexError::Invalid("only order maker may cancel".into()));
         }
@@ -256,6 +255,7 @@ impl DexEngine {
     ///
     /// Result is a `Trade` with TET escrow moved into a trade-specific escrow wallet.
     /// Release/refund is handled by `complete_trade_*` or `refund_expired()`.
+    #[allow(clippy::too_many_arguments)]
     pub fn take_best(
         &mut self,
         ledger: &Ledger,
@@ -283,10 +283,15 @@ impl DexEngine {
             Side::SellTET => Side::BuyTET,
         };
 
-        let best_order_id = self.best_order_id(want_opposite, quote_asset.trim(), max_price_quote_per_tet)
+        let best_order_id = self
+            .best_order_id(want_opposite, quote_asset.trim(), max_price_quote_per_tet)
             .ok_or(DexError::OrderNotFound)?;
 
-        let mut order = self.orders.get(&best_order_id).cloned().ok_or(DexError::OrderNotFound)?;
+        let mut order = self
+            .orders
+            .get(&best_order_id)
+            .cloned()
+            .ok_or(DexError::OrderNotFound)?;
         if order.expires_at_ms <= now_ms() {
             // Lazy cleanup.
             self.deindex_order(&order);
@@ -309,7 +314,9 @@ impl DexEngine {
         let trade_id = stable_id(
             "dex-trade-v1",
             &order.maker_wallet,
-            &sha256_hex(format!("{created_at_ms}|{best_order_id}|{taker_wallet}|{tet_micro}").as_bytes())[..32],
+            &sha256_hex(
+                format!("{created_at_ms}|{best_order_id}|{taker_wallet}|{tet_micro}").as_bytes(),
+            )[..32],
         );
         let order_escrow = escrow_wallet_for_order(&order.id);
         let trade_escrow = escrow_wallet_for_trade(&trade_id);
@@ -357,9 +364,15 @@ impl DexEngine {
         let tid = trade_id.trim();
         let txid = solana_usdc_txid.trim();
         if tid.is_empty() || txid.is_empty() {
-            return Err(DexError::Invalid("trade_id and solana_usdc_txid required".into()));
+            return Err(DexError::Invalid(
+                "trade_id and solana_usdc_txid required".into(),
+            ));
         }
-        let mut t = self.trades.get(tid).cloned().ok_or(DexError::TradeNotFound)?;
+        let mut t = self
+            .trades
+            .get(tid)
+            .cloned()
+            .ok_or(DexError::TradeNotFound)?;
         if t.status != TradeStatus::PendingSettlement {
             return Err(DexError::Invalid("trade not pending settlement".into()));
         }
@@ -381,7 +394,11 @@ impl DexEngine {
         ledger: &Ledger,
         trade_id: &str,
     ) -> Result<Trade, DexError> {
-        let mut t = self.trades.get(trade_id).cloned().ok_or(DexError::TradeNotFound)?;
+        let mut t = self
+            .trades
+            .get(trade_id)
+            .cloned()
+            .ok_or(DexError::TradeNotFound)?;
         if t.status != TradeStatus::PendingSettlement {
             return Ok(t);
         }
@@ -404,7 +421,11 @@ impl DexEngine {
         ledger: &Ledger,
         trade_id: &str,
     ) -> Result<Trade, DexError> {
-        let mut t = self.trades.get(trade_id).cloned().ok_or(DexError::TradeNotFound)?;
+        let mut t = self
+            .trades
+            .get(trade_id)
+            .cloned()
+            .ok_or(DexError::TradeNotFound)?;
         if t.status != TradeStatus::PendingSettlement {
             return Ok(t);
         }
@@ -426,13 +447,22 @@ impl DexEngine {
         ledger: &Ledger,
         order_id: &str,
     ) -> Result<Order, DexError> {
-        let mut o = self.orders.get(order_id).cloned().ok_or(DexError::OrderNotFound)?;
+        let mut o = self
+            .orders
+            .get(order_id)
+            .cloned()
+            .ok_or(DexError::OrderNotFound)?;
         if o.expires_at_ms > now_ms() {
             return Err(DexError::Invalid("order not yet expired".into()));
         }
         if o.tet_micro_remaining > 0 {
             let order_escrow = escrow_wallet_for_order(&o.id);
-            let _ = ledger.transfer_with_fee(&order_escrow, &o.maker_wallet, o.tet_micro_remaining, None)?;
+            let _ = ledger.transfer_with_fee(
+                &order_escrow,
+                &o.maker_wallet,
+                o.tet_micro_remaining,
+                None,
+            )?;
             o.tet_micro_remaining = 0;
         }
         self.deindex_order(&o);
@@ -449,7 +479,11 @@ impl DexEngine {
         let mut refunded = Vec::new();
         let ids: Vec<String> = self.trades.keys().cloned().collect();
         for id in ids {
-            let t = self.trades.get(&id).cloned().ok_or(DexError::TradeNotFound)?;
+            let t = self
+                .trades
+                .get(&id)
+                .cloned()
+                .ok_or(DexError::TradeNotFound)?;
             if t.status == TradeStatus::PendingSettlement && t.deadline_at_ms <= now_ms {
                 let _ = self.refund_trade_to_maker(ledger, &id)?;
                 refunded.push(id);
@@ -513,16 +547,17 @@ impl DexEngine {
             Side::SellTET => {
                 // Lowest ask that matches constraints.
                 for (price, q) in &self.sell_by_price {
-                    if let Some(maxp) = max_price_quote_per_tet {
-                        if *price > maxp {
-                            return None;
-                        }
+                    if let Some(maxp) = max_price_quote_per_tet
+                        && *price > maxp
+                    {
+                        return None;
                     }
                     for id in q {
-                        if let Some(o) = self.orders.get(id) {
-                            if o.quote_asset == quote_asset && o.tet_micro_remaining > 0 {
-                                return Some(id.clone());
-                            }
+                        if let Some(o) = self.orders.get(id)
+                            && o.quote_asset == quote_asset
+                            && o.tet_micro_remaining > 0
+                        {
+                            return Some(id.clone());
                         }
                     }
                 }
@@ -539,10 +574,11 @@ impl DexEngine {
                         }
                     }
                     for id in q {
-                        if let Some(o) = self.orders.get(id) {
-                            if o.quote_asset == quote_asset && o.tet_micro_remaining > 0 {
-                                return Some(id.clone());
-                            }
+                        if let Some(o) = self.orders.get(id)
+                            && o.quote_asset == quote_asset
+                            && o.tet_micro_remaining > 0
+                        {
+                            return Some(id.clone());
                         }
                     }
                 }
@@ -551,4 +587,3 @@ impl DexEngine {
         }
     }
 }
-

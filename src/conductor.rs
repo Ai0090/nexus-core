@@ -3,10 +3,10 @@
 //! This is a deterministic scaffold. Production should distribute shards to remote workers and use
 //! the verification engine to compare redundant results across devices.
 
+use rand_core::RngCore as _;
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use tet_core::tet_worker::poc_infer;
-use rand_core::RngCore as _;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ShardSpec {

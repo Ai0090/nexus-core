@@ -22,23 +22,20 @@ use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSec
 use zeroize::Zeroize as _;
 
 fn infer_from_task_plain(pt: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(pt) {
-        if let serde_json::Value::Object(ref m) = v {
-            let kind = m.get("kind").and_then(|x| x.as_str());
-            let looks_structured = kind == Some("tet_b2b_infer_v1")
-                || m.contains_key("input")
-                || m.contains_key("model");
-            if looks_structured {
-                let model = m.get("model").and_then(|x| x.as_str()).unwrap_or("default");
-                let input = m.get("input").and_then(|x| x.as_str()).unwrap_or("");
-                let input = if input.trim().is_empty() {
-                    String::from_utf8_lossy(pt).into_owned()
-                } else {
-                    input.to_string()
-                };
-                let r = tet_core::ai_local::infer_text(model, &input);
-                return Ok(serde_json::to_vec(&r)?);
-            }
+    if let Ok(serde_json::Value::Object(ref m)) = serde_json::from_slice::<serde_json::Value>(pt) {
+        let kind = m.get("kind").and_then(|x| x.as_str());
+        let looks_structured =
+            kind == Some("tet_b2b_infer_v1") || m.contains_key("input") || m.contains_key("model");
+        if looks_structured {
+            let model = m.get("model").and_then(|x| x.as_str()).unwrap_or("default");
+            let input = m.get("input").and_then(|x| x.as_str()).unwrap_or("");
+            let input = if input.trim().is_empty() {
+                String::from_utf8_lossy(pt).into_owned()
+            } else {
+                input.to_string()
+            };
+            let r = tet_core::ai_local::infer_text(model, &input);
+            return Ok(serde_json::to_vec(&r)?);
         }
     }
     let s = String::from_utf8_lossy(pt).into_owned();
@@ -141,6 +138,7 @@ async fn cmd_heartbeat() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
         "hardware_id_hex": hw,
         "ed25519_pubkey_hex": ed25519_pubkey_hex,
         "x25519_pubkey_b64": x25519_pubkey_b64,
+        "mlkem_pubkey_b64": std::env::var("TET_WORKER_MLKEM_PUB_B64").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         "tflops_est": tflops,
     });
     let r = client
@@ -176,8 +174,12 @@ async fn cmd_e2ee_loop() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
     struct NextJob {
         job_id: String,
         client_ephemeral_pub_b64: String,
+        #[serde(default)]
+        client_mlkem_pub_b64: String,
         nonce_b64: String,
         ciphertext_b64: String,
+        #[serde(default)]
+        mlkem_ciphertext_b64: String,
     }
 
     loop {
@@ -200,16 +202,28 @@ async fn cmd_e2ee_loop() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
         let nonce_raw = base64::engine::general_purpose::STANDARD.decode(j.nonce_b64.as_bytes())?;
         let nonce12: [u8; 12] = nonce_raw.try_into().map_err(|_| "bad nonce")?;
         let ct = base64::engine::general_purpose::STANDARD.decode(j.ciphertext_b64.as_bytes())?;
-        let pt = tet_core::e2ee::decrypt_on_worker(&worker_sk, &client_pk, nonce12, &ct)?;
+        let worker_mlkem_sk_b64 = std::env::var("TET_WORKER_MLKEM_SK_B64").unwrap_or_default();
+        let worker_mlkem_sk = tet_core::e2ee::decode_mlkem_sk_b64(worker_mlkem_sk_b64.trim())?;
+        let mlkem_ct = tet_core::e2ee::decode_mlkem_ct_b64(j.mlkem_ciphertext_b64.trim())?;
+        let pt = tet_core::e2ee::decrypt_on_worker(
+            &worker_sk,
+            &client_pk,
+            &worker_mlkem_sk,
+            &mlkem_ct,
+            nonce12,
+            &ct,
+        )?;
 
         let result_json = infer_from_task_plain(&pt)?;
 
         let mut out_nonce = [0u8; 12];
         let mut rng = rand_core::OsRng;
         rng.fill_bytes(&mut out_nonce);
-        let out_ct = tet_core::e2ee::encrypt_on_worker(
+        let client_mlkem_pk = tet_core::e2ee::decode_mlkem_pub_b64(j.client_mlkem_pub_b64.trim())?;
+        let (out_ct, out_mlkem_ct) = tet_core::e2ee::encrypt_on_worker(
             &worker_sk,
             &client_pk,
+            &client_mlkem_pk,
             out_nonce,
             &result_json,
         )?;
@@ -220,6 +234,7 @@ async fn cmd_e2ee_loop() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
             "job_id": j.job_id,
             "result_nonce_b64": base64::engine::general_purpose::STANDARD.encode(out_nonce),
             "result_ciphertext_b64": base64::engine::general_purpose::STANDARD.encode(out_ct),
+            "result_mlkem_ciphertext_b64": base64::engine::general_purpose::STANDARD.encode(out_mlkem_ct),
         });
         let rr = reqwest::Client::new()
             .post(url)

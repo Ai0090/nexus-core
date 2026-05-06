@@ -1,0 +1,38 @@
+name: Rust
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  # CI runners may not have the RISC0 guest target/toolchain installed.
+  # Skipping guest builds keeps clippy/test deterministic for contributors.
+  RISC0_SKIP_BUILD: "1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt (check)
+        run: cargo fmt -- --check
+
+      - name: clippy (deny warnings)
+        run: cargo clippy -- -D warnings
+
+      - name: test
+        run: cargo test
+

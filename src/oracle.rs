@@ -39,8 +39,8 @@ pub fn reward_micro_from_energy(chf_amount_micro: u64, profit_margin: f64) -> u6
         0.0
     };
     let gross_chf_micro = (chf_amount_micro as f64 * (1.0 + pm)).ceil().max(0.0);
-    // 1 CHF == 1 TET; 1 TET == 100_000_000 stevemon.
-    let stevemon_per_chf_micro = 100_000_000u128 / 1_000_000u128; // 100
+    // 1 CHF == 1 TET; peg Stevemon atoms via [`crate::ledger::STEVEMON`] per millionths CHF.
+    let stevemon_per_chf_micro = crate::ledger::STEVEMON as u128 / 1_000_000u128;
     let micro = gross_chf_micro as u128;
     let out = micro.saturating_mul(stevemon_per_chf_micro);
     u64::try_from(out).unwrap_or(u64::MAX)

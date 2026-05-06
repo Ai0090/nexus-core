@@ -5,7 +5,7 @@ import { argon2id } from "@noble/hashes/argon2";
 import { hkdf } from "@noble/hashes/hkdf";
 import { sha256 } from "@noble/hashes/sha2";
 import { sha512 } from "@noble/hashes/sha512";
-import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
+import { ml_dsa44, ml_dsa65 } from "@noble/post-quantum/ml-dsa.js";
 
 // @noble/ed25519 (newer versions) requires explicit sync SHA-512 injection.
 // Different versions expect it on different namespaces (`etc` vs `utils`), so set both.
@@ -54,7 +54,45 @@ export function tetSecretKey32FromMnemonic(mnemonic) {
   return seed.subarray(0, 32);
 }
 
-/** HKDF seed for ML-DSA-44 (matches Rust `mldsa44_seed32_from_mnemonic`). */
+/** HKDF seed for ML-DSA-65 (matches Rust `wallet::mldsa_seed32_from_mnemonic` default). */
+export function tetMldsaSeed32(mnemonic) {
+  const norm = String(mnemonic || "")
+    .trim()
+    .split(/\s+/)
+    .join(" ");
+  if (!validateMnemonic(norm, wordlist)) {
+    throw new Error("invalid mnemonic");
+  }
+  const seed = mnemonicToSeedSync(norm, "");
+  const info = new TextEncoder().encode("tet:pqc:mldsa65-seed:v1");
+  return hkdf(sha256, seed, undefined, info, 32);
+}
+
+/** ML-DSA-65 keypair from mnemonic — `{ secretKey, publicKey }` as Uint8Arrays (FIPS 204 raw bytes). */
+export function tetMldsaKeypairFromMnemonic(mnemonic) {
+  const seed32 = tetMldsaSeed32(mnemonic);
+  return ml_dsa65.keygen(seed32);
+}
+
+/** ML-DSA-65 public key STANDARD base64 (matches default `WalletInfo.dilithium_pubkey_b64`). */
+export function tetMldsaPubkeyB64FromMnemonic(mnemonic) {
+  const { publicKey } = tetMldsaKeypairFromMnemonic(mnemonic);
+  let bin = "";
+  for (let i = 0; i < publicKey.length; i++) bin += String.fromCharCode(publicKey[i]);
+  return btoa(bin);
+}
+
+/** Deterministic signing randomness (matches Rust `wallet::mldsa_signing_rnd` for Dilithium3). */
+export function tetMldsaSigningRnd(msgBytes) {
+  return sha256(
+    new Uint8Array([
+      ...new TextEncoder().encode("tet:mldsa65-signing-rnd:v1"),
+      ...msgBytes,
+    ])
+  );
+}
+
+/** HKDF seed for ML-DSA-44 (matches Rust `mldsa44_seed32_from_mnemonic`; legacy). */
 export function tetMldsa44Seed32(mnemonic) {
   const norm = String(mnemonic || "")
     .trim()
@@ -110,19 +148,19 @@ export function tetStakeHybridAuthMessageUtf8(walletIdHex, amountMicro, nonce, m
   return `tet stake hybrid v1|${w}|${amountMicro}|${nonce}|${p}`;
 }
 
-/** Hybrid stake signatures for `POST /wallet/stake` (Ed25519 hex + ML-DSA-44 base64). */
+/** Hybrid stake signatures for `POST /wallet/stake` (Ed25519 hex + ML-DSA base64; default ML-DSA-65). */
 export async function tetSignWalletStakeHybrid(mnemonic, amountMicro, nonce) {
   const wid = tetWalletIdFromMnemonic(mnemonic);
-  const mldsaPub = tetMldsa44PubkeyB64FromMnemonic(mnemonic);
+  const mldsaPub = tetMldsaPubkeyB64FromMnemonic(mnemonic);
   const utf8 = tetStakeHybridAuthMessageUtf8(wid, amountMicro, nonce, mldsaPub);
   const msg = new TextEncoder().encode(utf8);
   const sk32 = tetSecretKey32FromMnemonic(mnemonic);
   const edSig = await ed.sign(msg, sk32);
   let edHex = "";
   for (let i = 0; i < edSig.length; i++) edHex += edSig[i].toString(16).padStart(2, "0");
-  const { secretKey } = tetMldsa44KeypairFromMnemonic(mnemonic);
-  const rnd = tetMldsa44SigningRnd(msg);
-  const pqcSig = ml_dsa44.sign(msg, secretKey, { extraEntropy: rnd });
+  const { secretKey } = tetMldsaKeypairFromMnemonic(mnemonic);
+  const rnd = tetMldsaSigningRnd(msg);
+  const pqcSig = ml_dsa65.sign(msg, secretKey, { extraEntropy: rnd });
   let pqcB64 = "";
   for (let i = 0; i < pqcSig.length; i++) pqcB64 += String.fromCharCode(pqcSig[i]);
   pqcB64 = btoa(pqcB64);
@@ -142,14 +180,14 @@ export async function tetSignWalletTransferHybrid(sk32, toWallet, amountMicro, n
   return hex;
 }
 
-/** ML-DSA-44 signature STANDARD base64 over the same hybrid message bytes. */
+/** ML-DSA-65 signature STANDARD base64 over the same hybrid message bytes (legacy export name kept). */
 export function tetSignMldsa44HybridTransfer(mnemonic, toWallet, amountMicro, nonce, mldsaPubkeyB64) {
   const msg = new TextEncoder().encode(
     tetTransferHybridAuthMessageUtf8(toWallet, amountMicro, nonce, mldsaPubkeyB64)
   );
-  const { secretKey } = tetMldsa44KeypairFromMnemonic(mnemonic);
-  const rnd = tetMldsa44SigningRnd(msg);
-  const sig = ml_dsa44.sign(msg, secretKey, { extraEntropy: rnd });
+  const { secretKey } = tetMldsaKeypairFromMnemonic(mnemonic);
+  const rnd = tetMldsaSigningRnd(msg);
+  const sig = ml_dsa65.sign(msg, secretKey, { extraEntropy: rnd });
   let bin = "";
   for (let i = 0; i < sig.length; i++) bin += String.fromCharCode(sig[i]);
   return btoa(bin);
@@ -182,10 +220,10 @@ export async function tetDexTradeCompleteHybridHeaders(mnemonic, trade, solanaTx
   const msg = tetDexTradeCompleteMessageV1(trade, solanaTxid);
   const sk32 = tetSecretKey32FromMnemonic(mnemonic);
   const edSigB64 = await tetSignUtf8Ed25519B64(sk32, new TextDecoder().decode(msg));
-  const mldsaPub = tetMldsa44PubkeyB64FromMnemonic(mnemonic);
-  const { secretKey } = tetMldsa44KeypairFromMnemonic(mnemonic);
-  const rnd = tetMldsa44SigningRnd(msg);
-  const pqcSig = ml_dsa44.sign(msg, secretKey, { extraEntropy: rnd });
+  const mldsaPub = tetMldsaPubkeyB64FromMnemonic(mnemonic);
+  const { secretKey } = tetMldsaKeypairFromMnemonic(mnemonic);
+  const rnd = tetMldsaSigningRnd(msg);
+  const pqcSig = ml_dsa65.sign(msg, secretKey, { extraEntropy: rnd });
   let pqcB64 = "";
   for (let i = 0; i < pqcSig.length; i++) pqcB64 += String.fromCharCode(pqcSig[i]);
   pqcB64 = btoa(pqcB64);
@@ -266,7 +304,7 @@ export async function tetSignEnterpriseInferenceHybrid(
   model,
   attestationRequired
 ) {
-  const mldsaPub = tetMldsa44PubkeyB64FromMnemonic(mnemonic);
+  const mldsaPub = tetMldsaPubkeyB64FromMnemonic(mnemonic);
   const utf8 = tetEnterpriseInferenceHybridMessageUtf8(
     enterpriseWalletId,
     nonce,
@@ -279,9 +317,9 @@ export async function tetSignEnterpriseInferenceHybrid(
   const sk32 = tetSecretKey32FromMnemonic(mnemonic);
   const edB64 = await tetSignUtf8Ed25519B64(sk32, utf8);
   const msg = new TextEncoder().encode(utf8);
-  const { secretKey } = tetMldsa44KeypairFromMnemonic(mnemonic);
-  const rnd = tetMldsa44SigningRnd(msg);
-  const pqcSig = ml_dsa44.sign(msg, secretKey, { extraEntropy: rnd });
+  const { secretKey } = tetMldsaKeypairFromMnemonic(mnemonic);
+  const rnd = tetMldsaSigningRnd(msg);
+  const pqcSig = ml_dsa65.sign(msg, secretKey, { extraEntropy: rnd });
   let pqcB64 = "";
   for (let i = 0; i < pqcSig.length; i++) pqcB64 += String.fromCharCode(pqcSig[i]);
   pqcB64 = btoa(pqcB64);
@@ -289,14 +327,14 @@ export async function tetSignEnterpriseInferenceHybrid(
 }
 
 export async function tetSignFounderGenesisHybrid(mnemonic, founderWalletId) {
-  const mldsaPub = tetMldsa44PubkeyB64FromMnemonic(mnemonic);
+  const mldsaPub = tetMldsaPubkeyB64FromMnemonic(mnemonic);
   const utf8 = tetFounderGenesisHybridMessageUtf8(founderWalletId, mldsaPub);
   const sk32 = tetSecretKey32FromMnemonic(mnemonic);
   const edB64 = await tetSignUtf8Ed25519B64(sk32, utf8);
   const msg = new TextEncoder().encode(utf8);
-  const { secretKey } = tetMldsa44KeypairFromMnemonic(mnemonic);
-  const rnd = tetMldsa44SigningRnd(msg);
-  const pqcSig = ml_dsa44.sign(msg, secretKey, { extraEntropy: rnd });
+  const { secretKey } = tetMldsaKeypairFromMnemonic(mnemonic);
+  const rnd = tetMldsaSigningRnd(msg);
+  const pqcSig = ml_dsa65.sign(msg, secretKey, { extraEntropy: rnd });
   let pqcB64 = "";
   for (let i = 0; i < pqcSig.length; i++) pqcB64 += String.fromCharCode(pqcSig[i]);
   pqcB64 = btoa(pqcB64);
@@ -304,14 +342,14 @@ export async function tetSignFounderGenesisHybrid(mnemonic, founderWalletId) {
 }
 
 export async function tetSignFounderWithdrawTreasuryHybrid(mnemonic, founderWalletId, amountMicro, nonce) {
-  const mldsaPub = tetMldsa44PubkeyB64FromMnemonic(mnemonic);
+  const mldsaPub = tetMldsaPubkeyB64FromMnemonic(mnemonic);
   const utf8 = tetFounderWithdrawTreasuryHybridMessageUtf8(founderWalletId, amountMicro, nonce, mldsaPub);
   const sk32 = tetSecretKey32FromMnemonic(mnemonic);
   const edB64 = await tetSignUtf8Ed25519B64(sk32, utf8);
   const msg = new TextEncoder().encode(utf8);
-  const { secretKey } = tetMldsa44KeypairFromMnemonic(mnemonic);
-  const rnd = tetMldsa44SigningRnd(msg);
-  const pqcSig = ml_dsa44.sign(msg, secretKey, { extraEntropy: rnd });
+  const { secretKey } = tetMldsaKeypairFromMnemonic(mnemonic);
+  const rnd = tetMldsaSigningRnd(msg);
+  const pqcSig = ml_dsa65.sign(msg, secretKey, { extraEntropy: rnd });
   let pqcB64 = "";
   for (let i = 0; i < pqcSig.length; i++) pqcB64 += String.fromCharCode(pqcSig[i]);
   pqcB64 = btoa(pqcB64);
@@ -320,7 +358,7 @@ export async function tetSignFounderWithdrawTreasuryHybrid(mnemonic, founderWall
 
 /** Returns `{ ed25519_sig_b64, mldsa_signature_b64 }` for claim headers (message is hybrid UTF-8). */
 export async function tetSignGenesis1kClaimHybrid(mnemonic, walletId) {
-  const mldsaPub = tetMldsa44PubkeyB64FromMnemonic(mnemonic);
+  const mldsaPub = tetMldsaPubkeyB64FromMnemonic(mnemonic);
   const utf8 = tetGenesis1kClaimHybridMessageUtf8(walletId, mldsaPub);
   const sk32 = tetSecretKey32FromMnemonic(mnemonic);
   const msg = new TextEncoder().encode(utf8);
@@ -328,9 +366,9 @@ export async function tetSignGenesis1kClaimHybrid(mnemonic, walletId) {
   let edB64 = "";
   for (let i = 0; i < edSig.length; i++) edB64 += String.fromCharCode(edSig[i]);
   edB64 = btoa(edB64);
-  const { secretKey } = tetMldsa44KeypairFromMnemonic(mnemonic);
-  const rnd = tetMldsa44SigningRnd(msg);
-  const pqcSig = ml_dsa44.sign(msg, secretKey, { extraEntropy: rnd });
+  const { secretKey } = tetMldsaKeypairFromMnemonic(mnemonic);
+  const rnd = tetMldsaSigningRnd(msg);
+  const pqcSig = ml_dsa65.sign(msg, secretKey, { extraEntropy: rnd });
   let pqcB64 = "";
   for (let i = 0; i < pqcSig.length; i++) pqcB64 += String.fromCharCode(pqcSig[i]);
   pqcB64 = btoa(pqcB64);
@@ -360,6 +398,10 @@ const __tetWalletClientExports = {
   tetGenerateMnemonic12,
   tetWalletIdFromMnemonic,
   tetSecretKey32FromMnemonic,
+  tetMldsaSeed32,
+  tetMldsaKeypairFromMnemonic,
+  tetMldsaPubkeyB64FromMnemonic,
+  tetMldsaSigningRnd,
   tetMldsa44Seed32,
   tetMldsa44KeypairFromMnemonic,
   tetMldsa44PubkeyB64FromMnemonic,

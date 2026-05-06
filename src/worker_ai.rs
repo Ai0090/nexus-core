@@ -61,7 +61,10 @@ fn warn_if_low_ram() {
     if avail_bytes < 8u64 * 1024 * 1024 * 1024 {
         eprintln!("===============================================================");
         eprintln!("INSUFFICIENT RAM FOR HIGH-TIER AI INFERENCE.");
-        eprintln!("available_ram_gb≈{:.2}", avail_bytes as f64 / (1024.0 * 1024.0 * 1024.0));
+        eprintln!(
+            "available_ram_gb≈{:.2}",
+            avail_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+        );
         eprintln!("Proceeding anyway (use at your own risk).");
         eprintln!("===============================================================");
     }
@@ -127,7 +130,8 @@ fn load_model_gguf_from_disk() -> Result<(qllama::ModelWeights, PathBuf)> {
         ));
     }
 
-    let mut file = std::fs::File::open(&model_path).with_context(|| format!("open {model_path:?}"))?;
+    let mut file =
+        std::fs::File::open(&model_path).with_context(|| format!("open {model_path:?}"))?;
     let content =
         candle::quantized::gguf_file::Content::read(&mut file).with_context(|| "read gguf")?;
 
@@ -172,10 +176,10 @@ fn init_state() -> Result<ModelState> {
 }
 
 fn state() -> Result<std::sync::MutexGuard<'static, ModelState>> {
-    let m = MODEL_STATE.get_or_try_init(|| -> Result<Mutex<ModelState>> {
-        Ok(Mutex::new(init_state()?))
-    })?;
-    m.lock().map_err(|_| anyhow::anyhow!("AI model mutex poisoned"))
+    let m = MODEL_STATE
+        .get_or_try_init(|| -> Result<Mutex<ModelState>> { Ok(Mutex::new(init_state()?)) })?;
+    m.lock()
+        .map_err(|_| anyhow::anyhow!("AI model mutex poisoned"))
 }
 
 fn download_state() -> &'static tokio::sync::Mutex<ModelDownloadState> {
@@ -200,7 +204,11 @@ pub async fn model_status_v1() -> ModelStatusV1 {
         tokenizer_repo: tokenizer_repo(),
         tokenizer_path: tok_path.to_string_lossy().to_string(),
         total_bytes: st.total_bytes,
-        downloaded_bytes: if st.downloading { st.downloaded_bytes } else { downloaded_bytes.max(st.downloaded_bytes) },
+        downloaded_bytes: if st.downloading {
+            st.downloaded_bytes
+        } else {
+            downloaded_bytes.max(st.downloaded_bytes)
+        },
         error: st.error,
     }
 }
@@ -232,10 +240,15 @@ async fn download_to_path_with_progress(url: &str, dst: &PathBuf) -> Result<()> 
     if !resp.status().is_success() {
         return Err(anyhow::anyhow!("download failed HTTP {}", resp.status()));
     }
-    let parent = dst.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+    let parent = dst
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
     tokio::fs::create_dir_all(&parent).await.ok();
     let tmp = dst.with_extension("partial");
-    let mut file = tokio::fs::File::create(&tmp).await.context("create partial file")?;
+    let mut file = tokio::fs::File::create(&tmp)
+        .await
+        .context("create partial file")?;
     let mut stream = resp.bytes_stream();
     while let Some(item) = stream.next().await {
         let bytes = item.context("stream read")?;
@@ -247,7 +260,9 @@ async fn download_to_path_with_progress(url: &str, dst: &PathBuf) -> Result<()> 
     }
     tokio::io::AsyncWriteExt::flush(&mut file).await.ok();
     drop(file);
-    tokio::fs::rename(&tmp, dst).await.context("rename partial->final")?;
+    tokio::fs::rename(&tmp, dst)
+        .await
+        .context("rename partial->final")?;
     Ok(())
 }
 
@@ -387,4 +402,3 @@ pub fn run_local_inference(prompt: &str) -> Result<String> {
     eprintln!("[heavy-ai] generated_tokens={} elapsed_ms={dt}", all.len());
     Ok(text)
 }
-

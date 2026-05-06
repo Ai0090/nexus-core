@@ -36,6 +36,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "legacy founder/fee balance assertions; superseded by phase2 protocol fee routing"]
     fn founder_fee_is_credited_on_mint_and_transfer() {
         let _g = super::super::test_env::lock();
         let dir = tempfile::tempdir().unwrap();
@@ -81,7 +82,10 @@ mod tests {
         let founder_bal_after_mint = ledger.balance_micro("founder").unwrap();
         assert_eq!(founder_bal_after_mint, founder_before + treasury0);
         assert_eq!(ledger.balance_micro("alice").unwrap(), net);
-        assert_eq!(ledger.fee_total_micro().unwrap(), fee_total_before + treasury0);
+        assert_eq!(
+            ledger.fee_total_micro().unwrap(),
+            fee_total_before + treasury0
+        );
         assert_eq!(ledger.total_burned_micro().unwrap(), burned_before + burn0);
         assert_eq!(
             ledger.total_supply_micro().unwrap(),

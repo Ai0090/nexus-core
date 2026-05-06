@@ -3,8 +3,12 @@ target/
 
 # Local ledger / database / snapshots
 tet.db/
+tet.db_*/
 tet_data/
 *.db
+db_*/
+db_eta_*/
+db_node_*/
 tet_ledger.json
 *.snap.json
 

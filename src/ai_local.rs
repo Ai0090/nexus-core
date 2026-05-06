@@ -8,6 +8,7 @@
 //!    `TET_OLLAMA_MODEL` (default `llama3`), timeout `TET_OLLAMA_TIMEOUT_SECS` (default 120).
 //! 4. Deterministic `tet_worker::poc_infer` only if everything else fails (last resort).
 
+use crate::ai_filter::{ContentFilter as _, FilterStage};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use std::io::Write as _;
@@ -38,6 +39,7 @@ fn output_sha256(model: &str, text: &str) -> String {
     hex::encode(h.finalize())
 }
 
+#[cfg(debug_assertions)]
 fn run_ai_cmd(cmd: &str, input: &str) -> Result<String, std::io::Error> {
     use std::process::{Command, Stdio};
     let mut child = Command::new("sh")
@@ -120,20 +122,56 @@ fn ollama_or_poc(model: &str, input: &str) -> (String, String) {
 pub fn infer_text(model: &str, input: &str) -> AiInferResultV1 {
     let t0 = Instant::now();
 
-    let (output_text, proof_model): (String, String) =
+    // Phase 4.1: Node Operator Defense (SAFE MODE content filtering).
+    if crate::worker_config::safe_mode() {
+        let f = crate::ai_filter::default_filter();
+        if let Some(d) = f.check(FilterStage::Prompt, input) {
+            log::warn!(
+                "[safe_mode][block] stage=prompt sha256={} reason={}",
+                d.text_sha256_hex,
+                d.reason
+            );
+            let msg = "TET_ERR_SAFE_MODE: Prompt blocked by node operator policy.";
+            let elapsed_ms = t0.elapsed().as_millis();
+            return AiInferResultV1 {
+                v: 1,
+                model: "blocked".into(),
+                output_text: msg.into(),
+                proof: AiInferProofV1 {
+                    v: 1,
+                    model: "blocked".into(),
+                    output_sha256_hex: output_sha256("blocked", msg),
+                    elapsed_ms,
+                },
+            };
+        }
+    }
+
+    let (output_text, proof_model): (String, String) = if cfg!(debug_assertions) {
+        // Dev-only override: allow explicitly routing inference through a local command.
+        // This must never compile into production binaries.
         if let Ok(cmd) = std::env::var("TET_AI_CMD") {
             let cmd = cmd.trim();
             if !cmd.is_empty() {
-                (
-                    run_ai_cmd(cmd, input).unwrap_or_else(|_| crate::tet_worker::poc_infer(input)),
-                    model.to_string(),
-                )
+                #[cfg(debug_assertions)]
+                {
+                    (
+                        run_ai_cmd(cmd, input)
+                            .unwrap_or_else(|_| crate::tet_worker::poc_infer(input)),
+                        model.to_string(),
+                    )
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    unreachable!()
+                }
             } else {
-                // Heavy AI first. If it fails (model download, OOM, etc.), fall back.
                 match crate::worker_ai::run_local_inference(input) {
                     Ok(out) => (out, "llama3-8b-instruct-gguf-q4".into()),
                     Err(e) => {
-                        eprintln!("[Worker] Heavy AI inference failed: {e}. Falling back to Ollama/PoC.");
+                        eprintln!(
+                            "[Worker] Heavy AI inference failed: {e}. Falling back to Ollama/PoC."
+                        );
                         ollama_or_poc(model, input)
                     }
                 }
@@ -142,13 +180,48 @@ pub fn infer_text(model: &str, input: &str) -> AiInferResultV1 {
             match crate::worker_ai::run_local_inference(input) {
                 Ok(out) => (out, "llama3-8b-instruct-gguf-q4".into()),
                 Err(e) => {
-                    eprintln!("[Worker] Heavy AI inference failed: {e}. Falling back to Ollama/PoC.");
+                    eprintln!(
+                        "[Worker] Heavy AI inference failed: {e}. Falling back to Ollama/PoC."
+                    );
                     ollama_or_poc(model, input)
                 }
             }
-        };
+        }
+    } else {
+        match crate::worker_ai::run_local_inference(input) {
+            Ok(out) => (out, "llama3-8b-instruct-gguf-q4".into()),
+            Err(e) => {
+                eprintln!("[Worker] Heavy AI inference failed: {e}. Falling back to Ollama/PoC.");
+                ollama_or_poc(model, input)
+            }
+        }
+    };
 
     let elapsed_ms = t0.elapsed().as_millis();
+
+    if crate::worker_config::safe_mode() {
+        let f = crate::ai_filter::default_filter();
+        if let Some(d) = f.check(FilterStage::Output, &output_text) {
+            log::warn!(
+                "[safe_mode][block] stage=output sha256={} reason={}",
+                d.text_sha256_hex,
+                d.reason
+            );
+            let msg = "TET_ERR_SAFE_MODE: Output blocked by node operator policy.";
+            return AiInferResultV1 {
+                v: 1,
+                model: "blocked".into(),
+                output_text: msg.into(),
+                proof: AiInferProofV1 {
+                    v: 1,
+                    model: "blocked".into(),
+                    output_sha256_hex: output_sha256("blocked", msg),
+                    elapsed_ms,
+                },
+            };
+        }
+    }
+
     let osh = output_sha256(&proof_model, &output_text);
     AiInferResultV1 {
         v: 1,

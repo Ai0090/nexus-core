@@ -1,0 +1,232 @@
+//! Local worker execution engine (Phase 1).
+//!
+//! Real inference via a local Ollama instance and Stevemon / FLOPs accounting.
+
+use crate::ai_filter::{ContentFilter as _, FilterStage};
+use anyhow::{Context as _, anyhow};
+use base64::Engine as _;
+use nexus_protocol::InferenceJournalV1;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use tokio::task;
+
+const OLLAMA_GENERATE_URL: &str = "http://127.0.0.1:11434/api/generate";
+
+#[derive(Debug, Serialize)]
+struct OllamaGenerateReq<'a> {
+    model: &'a str,
+    prompt: &'a str,
+    stream: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct OllamaGenerateResp {
+    response: Option<String>,
+    /// Output-side token evaluations (Ollama).
+    eval_count: Option<u64>,
+    /// Prompt-side token evaluations when exposed by the runtime (`show_details` / newer API).
+    prompt_eval_count: Option<u64>,
+    eval_duration: Option<u64>, // nanoseconds
+}
+
+/// Metrics returned after a successful local inference run.
+#[derive(Debug, Clone)]
+pub struct LocalInferenceMetrics {
+    pub text: String,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    /// `(prompt_tokens + completion_tokens) * difficulty` (floor).
+    pub flops: u128,
+    /// Rough energy accountability from FLOPs (override via `TET_JOULES_PER_FLOP` × Wh scaling).
+    pub energy_wh: f64,
+    /// Cost in smallest Stevemon units (Stevemon “micro”).
+    pub cost_micro: u64,
+    /// Legacy telemetry: ~1000 tokens per NCU (whitepaper reference task).
+    pub ncu: f64,
+}
+
+fn env_u128(name: &str, default: u128) -> u128 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<u128>().ok())
+        .unwrap_or(default)
+        .max(1)
+}
+
+/// Run a real local inference via Ollama. Computes FLOPs from tokenizer-accurate token counts when available.
+pub async fn run_local_inference(prompt: &str) -> anyhow::Result<LocalInferenceMetrics> {
+    let p = prompt.trim();
+    if p.is_empty() {
+        return Err(anyhow!("prompt required"));
+    }
+
+    // Phase 4.1: Node Operator Defense (SAFE MODE content filtering).
+    if crate::worker_config::safe_mode() {
+        let f = crate::ai_filter::default_filter();
+        if let Some(d) = f.check(FilterStage::Prompt, p) {
+            log::warn!(
+                "[safe_mode][block] stage=prompt sha256={} reason={}",
+                d.text_sha256_hex,
+                d.reason
+            );
+            return Err(anyhow!(
+                "TET_ERR_SAFE_MODE: Prompt blocked by node operator policy."
+            ));
+        }
+    }
+
+    let client = Client::new();
+    let body = OllamaGenerateReq {
+        model: "llama3",
+        prompt: p,
+        stream: false,
+    };
+
+    let resp = match client.post(OLLAMA_GENERATE_URL).json(&body).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("[ollama] POST failed url={} err={e:?}", OLLAMA_GENERATE_URL);
+            return Err(anyhow!("ollama POST failed: {e}"));
+        }
+    };
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        log::error!("[ollama] non-200 status={status} body={text}");
+        return Err(anyhow!("ollama error: status={status} body={text}"));
+    }
+
+    let out: OllamaGenerateResp = resp.json().await.context("ollama JSON decode failed")?;
+    let text = out.response.unwrap_or_default().trim().to_string();
+
+    if crate::worker_config::safe_mode() {
+        let f = crate::ai_filter::default_filter();
+        if let Some(d) = f.check(FilterStage::Output, &text) {
+            log::warn!(
+                "[safe_mode][block] stage=output sha256={} reason={}",
+                d.text_sha256_hex,
+                d.reason
+            );
+            return Err(anyhow!(
+                "TET_ERR_SAFE_MODE: Output blocked by node operator policy."
+            ));
+        }
+    }
+
+    let completion_tokens = out.eval_count.unwrap_or(0);
+    let prompt_tokens = out.prompt_eval_count.unwrap_or_else(|| {
+        // Rough tokenizer fallback when the runtime omits prompt_eval_count (still deterministic per prompt).
+        let est = (p.len().saturating_add(3)) / 4;
+        est.max(1) as u64
+    });
+
+    let difficulty = env_u128("TET_MODEL_DIFFICULTY_FLOPS_PER_TOKEN", 1_000_000);
+    let tok_sum = (prompt_tokens as u128).saturating_add(completion_tokens as u128);
+    let flops = tok_sum.saturating_mul(difficulty);
+
+    // Reference: 3.6e12 J per kWh → Wh = J / 3.6e9.
+    let joules_per_flop = crate::vision::thermo_genesis::env_joules_per_flop();
+    let energy_wh = (flops as f64 * joules_per_flop) / 3.6e9_f64;
+
+    let gamma = crate::vision::thermo_genesis::NetworkDifficulty::from_env();
+    let cost_micro = crate::vision::thermo_genesis::discrete_thermodynamic_reward_stevemon_micro(
+        flops,
+        joules_per_flop,
+        gamma,
+    )
+    .max(1);
+
+    let ncu = (prompt_tokens.saturating_add(completion_tokens) as f64) / 1000.0;
+
+    Ok(LocalInferenceMetrics {
+        text,
+        prompt_tokens,
+        completion_tokens,
+        flops,
+        energy_wh,
+        cost_micro,
+        ncu,
+    })
+}
+
+fn mock_receipt_b64(
+    prompt: &str,
+    response: &str,
+    worker_pubkey_bytes: [u8; 32],
+    cost_micro: u64,
+) -> anyhow::Result<String> {
+    use sha2::{Digest as _, Sha256};
+    let prompt_hash: [u8; 32] = Sha256::digest(prompt.as_bytes()).into();
+    let response_hash: [u8; 32] = Sha256::digest(response.as_bytes()).into();
+    let j = InferenceJournalV1 {
+        worker_pubkey_bytes,
+        prompt_hash,
+        response_hash,
+        cost_micro,
+    };
+    let bytes = bincode::serialize(&j)?;
+    Ok(format!(
+        "MOCKJ1:{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+pub async fn generate_receipt_b64(
+    prompt: &str,
+    response: &str,
+    worker_pubkey_bytes: [u8; 32],
+    cost_micro: u64,
+) -> anyhow::Result<String> {
+    // If prover is disabled, run optimistic mode with a mock journal receipt.
+    if !crate::worker_config::enable_zk_prover() {
+        return mock_receipt_b64(prompt, response, worker_pubkey_bytes, cost_micro);
+    }
+
+    // Dev safety: when guest is unavailable (e.g. RISC0_SKIP_BUILD=1), fall back to mock.
+    if methods::NEXUS_GUEST_ELF.is_empty() {
+        return mock_receipt_b64(prompt, response, worker_pubkey_bytes, cost_micro);
+    }
+
+    let p = prompt.to_string();
+    let r = response.to_string();
+    // Proving is heavy and blocking; never run on the async reactor.
+    task::spawn_blocking(move || prove_prompt_response(&p, &r, worker_pubkey_bytes, cost_micro))
+        .await
+        .map_err(|e| anyhow!("spawn_blocking prover join failed: {e}"))?
+}
+
+#[cfg(feature = "zk-prove")]
+pub fn prove_prompt_response(
+    prompt: &str,
+    response: &str,
+    worker_pubkey_bytes: [u8; 32],
+    _cost_micro: u64,
+) -> anyhow::Result<String> {
+    use risc0_zkvm::{ExecutorEnv, default_prover};
+
+    if methods::NEXUS_GUEST_ELF.is_empty() {
+        return mock_receipt_b64(prompt, response, worker_pubkey_bytes, _cost_micro);
+    }
+    let env = ExecutorEnv::builder()
+        .write(&0u8)?
+        .write(&prompt.to_string())?
+        .write(&response.to_string())?
+        .write(&worker_pubkey_bytes)?
+        .build()?;
+    let prover = default_prover();
+    let receipt = prover.prove(env, methods::NEXUS_GUEST_ELF)?.receipt;
+    let bytes = bincode::serialize(&receipt)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+#[cfg(not(feature = "zk-prove"))]
+pub fn prove_prompt_response(
+    prompt: &str,
+    response: &str,
+    worker_pubkey_bytes: [u8; 32],
+    cost_micro: u64,
+) -> anyhow::Result<String> {
+    // Lightweight dev path when prover feature isn't compiled in.
+    mock_receipt_b64(prompt, response, worker_pubkey_bytes, cost_micro)
+}

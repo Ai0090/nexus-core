@@ -5,7 +5,7 @@
 //   console.log(res);
 
 (function () {
-  const STEVEMON = 100_000_000;
+  const STEVEMON = 1_000_000;
 
   function coreBase() {
     const raw = String(localStorage.getItem("tet-core-base") || "")

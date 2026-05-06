@@ -72,9 +72,6 @@ fn verify_p2p_hybrid(m: &LedgerGossip) -> bool {
         )
         .is_ok(),
         LedgerGossip::TransferAnnounce { .. } | LedgerGossip::ProofAnnounce { .. } => {
-            if !crate::quantum_shield::pqc_active() {
-                return true;
-            }
             let (signer, preimage, ed, pk, ps) = match m {
                 LedgerGossip::TransferAnnounce {
                     signer_wallet_id,

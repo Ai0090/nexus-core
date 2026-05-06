@@ -12,9 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 static P2P_TX: Mutex<Option<UnboundedSender<Vec<u8>>>> = Mutex::new(None);
 
 pub fn set_p2p_sender(tx: Option<UnboundedSender<Vec<u8>>>) {
-    *P2P_TX
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = tx;
+    *P2P_TX.lock().unwrap_or_else(|e| e.into_inner()) = tx;
 }
 
 pub fn state_update_signing_message(sha256_hex: &str) -> String {
