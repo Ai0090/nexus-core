@@ -8,7 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::Duration;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChallengePhase {
     None,
@@ -18,7 +18,7 @@ pub enum ChallengePhase {
     Dismissed,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceDisputeState {
     pub inference_id: String,
     pub worker_wallet_id: String,
@@ -26,6 +26,10 @@ pub struct InferenceDisputeState {
     pub challenge_opens_at_ms: u128,
     pub challenge_closes_at_ms: u128,
     pub lazy_eval_suspected: bool,
+    #[serde(default)]
+    pub challenger_wallet_id: Option<String>,
+    #[serde(default)]
+    pub challenger_bond_micro: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -35,7 +39,7 @@ pub struct ChallengeSubmitReq {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceArtifact {
     pub prompt: String,
     pub response: String,
@@ -110,6 +114,7 @@ fn wallet_hex_to_pk32(wallet_hex: &str) -> Result<[u8; 32], String> {
 
 /// Record inference delivery + artifacts for later ZK-Court challenges.
 pub fn record_inference_delivered_full(
+    ledger: &Ledger,
     inference_id: &str,
     prompt: &str,
     response: &str,
@@ -135,11 +140,24 @@ pub fn record_inference_delivered_full(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(inference_id.to_string(), art);
-    record_inference_delivered(inference_id, worker_wallet_id);
+    if let Some(art) = ARTIFACTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(inference_id)
+        .cloned()
+        && let Ok(bytes) = serde_json::to_vec(&art)
+    {
+        let _ = ledger.zkcourt_put_artifact_json(inference_id, &bytes);
+    }
+    record_inference_delivered_persisted(ledger, inference_id, worker_wallet_id);
 }
 
 /// Opens challenge window (legacy single-arg wrapper calls this via full path from AI handler).
 pub fn record_inference_delivered(inference_id: &str, worker_wallet_id: &str) {
+    let _ = build_dispute_state(inference_id, worker_wallet_id);
+}
+
+fn build_dispute_state(inference_id: &str, worker_wallet_id: &str) -> InferenceDisputeState {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -152,11 +170,25 @@ pub fn record_inference_delivered(inference_id: &str, worker_wallet_id: &str) {
         challenge_opens_at_ms: now,
         challenge_closes_at_ms: now.saturating_add(win),
         lazy_eval_suspected: false,
+        challenger_wallet_id: None,
+        challenger_bond_micro: 0,
     };
     let _ = DISPUTES
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(inference_id.to_string(), st);
+        .insert(inference_id.to_string(), st.clone());
+    st
+}
+
+pub fn record_inference_delivered_persisted(
+    ledger: &Ledger,
+    inference_id: &str,
+    worker_wallet_id: &str,
+) {
+    let st = build_dispute_state(inference_id, worker_wallet_id);
+    if let Ok(bytes) = serde_json::to_vec(&st) {
+        let _ = ledger.zkcourt_put_dispute_json(inference_id, &bytes);
+    }
 }
 
 pub fn list_open() -> Vec<InferenceDisputeState> {
@@ -169,17 +201,51 @@ pub fn list_open() -> Vec<InferenceDisputeState> {
         .collect()
 }
 
+pub fn list_open_persisted(ledger: &Ledger) -> Vec<InferenceDisputeState> {
+    match ledger.zkcourt_list_dispute_json() {
+        Ok(rows) => rows
+            .into_iter()
+            .filter_map(|row| serde_json::from_slice::<InferenceDisputeState>(&row).ok())
+            .filter(|s| s.phase == ChallengePhase::ChallengeOpen)
+            .collect(),
+        Err(_) => list_open(),
+    }
+}
+
 /// Prepare dispute state for proving (internal); prefer [`run_challenge_pipeline`].
-pub fn submit_challenge(req: &ChallengeSubmitReq) -> Result<InferenceDisputeState, String> {
+pub fn submit_challenge(
+    ledger: &Ledger,
+    req: &ChallengeSubmitReq,
+) -> Result<InferenceDisputeState, String> {
+    let challenger = req.challenger_wallet_id.trim().to_ascii_lowercase();
+    if challenger.is_empty() {
+        return Err("challenger_wallet_id required".into());
+    }
+    let bond = ledger
+        .zkcourt_lock_challenger_bond(&req.inference_id, &challenger)
+        .map_err(|e| format!("challenger bond required: {e}"))?;
     let mut m = DISPUTES.lock().unwrap_or_else(|e| e.into_inner());
-    let ent = m
-        .get_mut(&req.inference_id)
-        .ok_or_else(|| "unknown inference_id".to_string())?;
+    if !m.contains_key(&req.inference_id)
+        && let Ok(Some(bytes)) = ledger.zkcourt_get_dispute_json(&req.inference_id)
+        && let Ok(st) = serde_json::from_slice::<InferenceDisputeState>(&bytes)
+    {
+        m.insert(req.inference_id.clone(), st);
+    }
+    let ent = m.get_mut(&req.inference_id).ok_or_else(|| {
+        let _ = ledger.zkcourt_settle_challenger_bond(&req.inference_id, &challenger, false);
+        "unknown inference_id".to_string()
+    })?;
     if ent.phase != ChallengePhase::ChallengeOpen {
+        let _ = ledger.zkcourt_settle_challenger_bond(&req.inference_id, &challenger, false);
         return Err("challenge not open for this inference".into());
     }
     ent.phase = ChallengePhase::EvidencePending;
     ent.lazy_eval_suspected = true;
+    ent.challenger_wallet_id = Some(challenger);
+    ent.challenger_bond_micro = bond;
+    if let Ok(bytes) = serde_json::to_vec(ent) {
+        let _ = ledger.zkcourt_put_dispute_json(&req.inference_id, &bytes);
+    }
     Ok(ent.clone())
 }
 
@@ -230,14 +296,28 @@ pub async fn run_challenge_pipeline(
     ledger: &Ledger,
     req: &ChallengeSubmitReq,
 ) -> Result<ChallengeOutcome, String> {
-    submit_challenge(req)?;
+    submit_challenge(ledger, req)?;
 
     let art = ARTIFACTS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(&req.inference_id)
         .cloned()
-        .ok_or_else(|| "no inference artifact (too old or not recorded)".to_string())?;
+        .or_else(|| {
+            ledger
+                .zkcourt_get_artifact_json(&req.inference_id)
+                .ok()
+                .flatten()
+                .and_then(|bytes| serde_json::from_slice::<InferenceArtifact>(&bytes).ok())
+        })
+        .ok_or_else(|| {
+            let _ = ledger.zkcourt_settle_challenger_bond(
+                &req.inference_id,
+                &req.challenger_wallet_id,
+                false,
+            );
+            "no inference artifact (too old or not recorded)".to_string()
+        })?;
 
     let host_ok = host_commitment_matches_artifact(&art);
     let timeout = Duration::from_secs(prove_timeout_sec());
@@ -338,6 +418,12 @@ pub fn apply_slash_verdict(
 ) -> Result<u64, String> {
     let worker = {
         let mut m = DISPUTES.lock().unwrap_or_else(|e| e.into_inner());
+        if !m.contains_key(inference_id)
+            && let Ok(Some(bytes)) = ledger.zkcourt_get_dispute_json(inference_id)
+            && let Ok(st) = serde_json::from_slice::<InferenceDisputeState>(&bytes)
+        {
+            m.insert(inference_id.to_string(), st);
+        }
         let ent = m
             .get_mut(inference_id)
             .ok_or_else(|| "unknown inference_id".to_string())?;
@@ -345,6 +431,13 @@ pub fn apply_slash_verdict(
             ent.phase = ChallengePhase::SlashExecuted;
         } else {
             ent.phase = ChallengePhase::Dismissed;
+        }
+        if let Ok(bytes) = serde_json::to_vec(ent) {
+            let _ = ledger.zkcourt_put_dispute_json(inference_id, &bytes);
+        }
+        let valid = verified_fraud;
+        if let Some(challenger) = ent.challenger_wallet_id.clone() {
+            let _ = ledger.zkcourt_settle_challenger_bond(inference_id, &challenger, valid);
         }
         ent.worker_wallet_id.clone()
     };
@@ -363,17 +456,17 @@ pub fn apply_slash_verdict(
     let s = r_expected.saturating_mul(lambda_multiplier());
     if s == 0 {
         log::warn!(
-            "[zk-court] slash amount S=0 (missing artifact or R_expected=0) inference_id={}",
+            "[zk-court] reward-based slash amount S=0; applying full worker bond slash inference_id={}",
             inference_id
         );
-        return Ok(0);
     }
 
-    match ledger.slash_wallet_liquid_burn_micro(&worker, s) {
+    match ledger.slash_worker_bond_to_ecosystem_all(&worker) {
         Ok(n) => Ok(n),
-        Err(crate::ledger::LedgerError::InsufficientFunds) => {
+        Err(crate::ledger::LedgerError::InsufficientFunds)
+        | Err(crate::ledger::LedgerError::Invalid(_)) => {
             log::warn!(
-                "[zk-court] slash: zero liquid balance wallet={} inference={}",
+                "[zk-court] slash: zero worker bond wallet={} inference={}",
                 worker,
                 inference_id
             );
@@ -449,7 +542,7 @@ pub fn execute_optimistic_slash_if_fraud(
         return Ok(None);
     }
     let burned = ledger
-        .slash_worker_bond_zk_court_burn_all(worker_id)
+        .slash_worker_bond_to_ecosystem_all(worker_id)
         .map_err(|e| e.to_string())?;
     {
         let mut w = workers.lock().unwrap_or_else(|e| e.into_inner());
@@ -469,7 +562,7 @@ pub fn execute_optimistic_slash_if_fraud(
         timestamp: timestamp_string(),
     };
     log::error!(
-        "[ZK-COURT] Worker {} SLASHED! {} Burned. offense={}",
+        "[ZK-COURT] Worker {} SLASHED! {} confiscated to ecosystem. offense={}",
         out.worker_id,
         out.punishment,
         out.offense

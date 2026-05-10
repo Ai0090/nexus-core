@@ -2,6 +2,7 @@ use crate::ledger::Ledger;
 use crate::p2p_dex::DexEngine;
 use crate::worker_network::WorkerRegistry;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
@@ -50,6 +51,119 @@ pub struct RestState {
     pub dex: Arc<StdMutex<DexEngine>>,
     pub genesis_1k_lock: Arc<tokio::sync::Mutex<()>>,
     pub log_tx: broadcast::Sender<String>,
+    pub log_sse_connections: Arc<AtomicUsize>,
+}
+
+#[derive(Debug, Clone)]
+pub enum MempoolEnqueueError {
+    TxTooLarge { bytes: usize, max_bytes: usize },
+    Full { txs: usize, bytes: usize },
+}
+
+impl std::fmt::Display for MempoolEnqueueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TxTooLarge { bytes, max_bytes } => {
+                write!(
+                    f,
+                    "transaction is too large for mempool: {bytes} > {max_bytes} bytes"
+                )
+            }
+            Self::Full { txs, bytes } => write!(
+                f,
+                "mempool is full and incoming tx fee is not high enough to evict: txs={txs} bytes={bytes}"
+            ),
+        }
+    }
+}
+
+impl RestState {
+    pub fn mempool_max_txs() -> usize {
+        std::env::var("TET_MEMPOOL_MAX_TXS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(10_000)
+    }
+
+    pub fn mempool_max_bytes() -> usize {
+        std::env::var("TET_MEMPOOL_MAX_BYTES")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(64 * 1024 * 1024)
+    }
+
+    pub fn tx_estimated_bytes(env: &SignedTxEnvelopeV1) -> usize {
+        serde_json::to_vec(env)
+            .map(|v| v.len())
+            .unwrap_or(usize::MAX)
+    }
+
+    pub fn tx_fee_score(env: &SignedTxEnvelopeV1) -> u128 {
+        match &env.tx {
+            crate::protocol::TxV1::Transfer {
+                amount_micro,
+                fee_bps,
+                ..
+            } => (*amount_micro as u128).saturating_mul(*fee_bps as u128) / 10_000,
+            crate::protocol::TxV1::EnterpriseInference { amount_micro, .. } => {
+                *amount_micro as u128
+            }
+            _ => 0,
+        }
+    }
+
+    pub async fn enqueue_mempool_tx(
+        &self,
+        env: SignedTxEnvelopeV1,
+    ) -> Result<bool, MempoolEnqueueError> {
+        let max_txs = Self::mempool_max_txs();
+        let max_bytes = Self::mempool_max_bytes();
+        let incoming_bytes = Self::tx_estimated_bytes(&env);
+        if incoming_bytes > max_bytes {
+            return Err(MempoolEnqueueError::TxTooLarge {
+                bytes: incoming_bytes,
+                max_bytes,
+            });
+        }
+
+        let incoming_fee = Self::tx_fee_score(&env);
+        let mut mp = self.mempool.lock().await;
+        let mut total_bytes = mp.iter().map(Self::tx_estimated_bytes).sum::<usize>();
+        let mut evicted = false;
+
+        while (mp.len() >= max_txs || total_bytes.saturating_add(incoming_bytes) > max_bytes)
+            && !mp.is_empty()
+        {
+            let Some((idx, lowest_fee)) = mp
+                .iter()
+                .enumerate()
+                .map(|(idx, existing)| (idx, Self::tx_fee_score(existing)))
+                .min_by_key(|(_, fee)| *fee)
+            else {
+                break;
+            };
+            if incoming_fee <= lowest_fee {
+                return Err(MempoolEnqueueError::Full {
+                    txs: mp.len(),
+                    bytes: total_bytes,
+                });
+            }
+            let removed = mp.remove(idx);
+            total_bytes = total_bytes.saturating_sub(Self::tx_estimated_bytes(&removed));
+            evicted = true;
+        }
+
+        if mp.len() >= max_txs || total_bytes.saturating_add(incoming_bytes) > max_bytes {
+            return Err(MempoolEnqueueError::Full {
+                txs: mp.len(),
+                bytes: total_bytes,
+            });
+        }
+        mp.push(env);
+        Ok(evicted)
+    }
 }
 
 #[derive(Debug)]

@@ -813,6 +813,7 @@ pub async fn post_ai_infer(
             use sha2::{Digest as _, Sha256};
             let infer_uid = format!("{:x}", Sha256::digest(prompt.trim().as_bytes()));
             crate::vision::zk_court::record_inference_delivered_full(
+                state.ledger.as_ref(),
                 &infer_uid,
                 prompt.trim(),
                 resp.trim(),

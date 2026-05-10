@@ -1,5 +1,22 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum WorkloadFlag {
+    Standard = 0,
+    AiInference = 1,
+}
+
+impl WorkloadFlag {
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
+}
+
+pub fn default_ai_workload_flag() -> u8 {
+    WorkloadFlag::AiInference.as_u8()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignedTxEnvelopeV1 {
     pub v: u32,
@@ -47,6 +64,9 @@ pub enum TxV1 {
         amount_micro: u64,
         nonce: u64,
         prompt_sha256_hex: String,
+        /// Whitepaper §5 Workload Flag: `1` = AI inference request.
+        #[serde(default = "default_ai_workload_flag")]
+        workload_flag: u8,
         /// If true, only route to workers with a verified hardware attestation (Founding cert).
         #[serde(default)]
         attestation_required: bool,
@@ -57,12 +77,33 @@ pub enum TxV1 {
     /// `receipt_b64` uses STANDARD base64 over `bincode`-serialized `risc0_zkvm::Receipt`.
     /// For local/dev tests, a mock receipt may be supplied with prefix `MOCKJ1:` (see `zk_verifier`).
     VerifyZkProof {
+        /// Original `EnterpriseInference` transaction hash. Used by consensus to settle exactly one
+        /// winning proof per AI task.
+        #[serde(default)]
+        task_id: String,
         image_id: [u32; 8],
         /// Public journal bytes (STANDARD base64). For RISC Zero receipts this should match `receipt.journal`.
         journal_b64: String,
         /// Receipt bytes (STANDARD base64), or dev-mode mock prefix `MOCKJ1:...`.
         receipt_b64: String,
     },
+}
+
+impl TxV1 {
+    pub fn workload_flag(&self) -> WorkloadFlag {
+        match self {
+            Self::EnterpriseInference { workload_flag, .. }
+                if *workload_flag == WorkloadFlag::AiInference.as_u8() =>
+            {
+                WorkloadFlag::AiInference
+            }
+            _ => WorkloadFlag::Standard,
+        }
+    }
+
+    pub fn is_ai_workload(&self) -> bool {
+        self.workload_flag() == WorkloadFlag::AiInference
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

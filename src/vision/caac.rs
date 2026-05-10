@@ -111,6 +111,22 @@ pub fn profile() -> CaacProfile {
     CaacProfile { role, hw }
 }
 
+/// Local, advisory resource weight for CAAC-aware consensus bootstrapping.
+///
+/// This value is not a consensus proof by itself; network-wide leader verification should use
+/// ledger-synced CAAC records so every node sees the same weights.
+pub fn local_resource_weight(profile: &CaacProfile) -> u64 {
+    let base = match profile.role {
+        NodeRelayRole::Poc => 100,
+        NodeRelayRole::Por => 25,
+    };
+    let ram_gib = profile.hw.ram_total_bytes / (1024 * 1024 * 1024);
+    let cpu_bonus = u64::from(profile.hw.cpu_logical_cores).saturating_mul(4);
+    let ram_bonus = ram_gib.min(128);
+    let gpu_bonus = if profile.hw.gpu_detected { 100 } else { 0 };
+    base + cpu_bonus + ram_bonus + gpu_bonus
+}
+
 /// Issued by [`generate_hardware_challenge`]; worker runs [`compute_challenge_digest`] and submits latency.
 #[derive(Debug, Clone, Serialize)]
 pub struct HardwareChallengePublic {

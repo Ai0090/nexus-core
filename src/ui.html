@@ -111,6 +111,67 @@
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
       }
 
+      /* Explorer */
+      .explorerWrap {
+        margin-top: 14px;
+        display: grid;
+        gap: 12px;
+      }
+      .metricGrid {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: 1fr;
+      }
+      @media (min-width: 860px) {
+        .metricGrid { grid-template-columns: 1fr 1fr 1fr; }
+      }
+      .metricCard {
+        border: 1px solid rgba(10, 37, 64, 0.10);
+        background: rgba(247, 249, 252, 0.70);
+        border-radius: 14px;
+        padding: 14px 14px;
+      }
+      .metricK {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(10, 37, 64, 0.62);
+      }
+      .metricV {
+        margin-top: 8px;
+        font-size: 18px;
+        font-weight: 800;
+        color: var(--navy);
+        letter-spacing: -0.01em;
+      }
+      .table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .table th, .table td {
+        padding: 10px 10px;
+        border-bottom: 1px solid rgba(10, 37, 64, 0.10);
+        font-size: 13px;
+      }
+      .table th {
+        text-align: left;
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(10, 37, 64, 0.62);
+      }
+      .table td {
+        color: rgba(26, 31, 54, 0.88);
+      }
+      .table tr:hover td {
+        background: rgba(99, 91, 255, 0.04);
+      }
+      .mutedLine {
+        font-size: 12px;
+        color: rgba(10, 37, 64, 0.62);
+      }
+
       /* Landing */
       .hero {
         padding: 44px 28px;
@@ -724,6 +785,50 @@
           <div class="mono" id="chatStatus" style="margin-top: 10px; color: rgba(10, 37, 64, 0.62); font-size: 12px;"></div>
       </section>
         </div>
+
+      <!-- Explorer -->
+      <section class="card section explorerWrap" aria-label="TET Explorer">
+        <h2 class="sectionTitle">TET Explorer</h2>
+        <p class="sectionBody" style="margin-top: 0;">
+          Live node overview + latest mined blocks (auto-refresh).
+        </p>
+
+        <div class="metricGrid" style="margin-top: 12px;">
+          <div class="metricCard">
+            <div class="metricK">Block Height</div>
+            <div class="metricV mono" id="explBlockHeight">—</div>
+          </div>
+          <div class="metricCard">
+            <div class="metricK">Mempool Pending</div>
+            <div class="metricV mono" id="explMempoolLen">—</div>
+          </div>
+          <div class="metricCard">
+            <div class="metricK">State Root</div>
+            <div class="metricV mono" id="explStateRoot" style="font-size: 13px; font-weight: 800; word-break: break-all;">—</div>
+          </div>
+        </div>
+
+        <div style="margin-top: 14px;">
+          <div class="metaRow" style="margin-bottom: 8px;">
+            <span>Latest Blocks</span>
+            <b class="mutedLine" id="explBlocksHint">Polling…</b>
+          </div>
+          <div style="overflow:auto; border-radius: 14px; border: 1px solid rgba(10,37,64,0.10);">
+            <table class="table" aria-label="Latest blocks table">
+              <thead>
+                <tr>
+                  <th>Height</th>
+                  <th>Txs</th>
+                  <th>State Root</th>
+                </tr>
+              </thead>
+              <tbody id="explBlocksTbody">
+                <tr><td class="mono" colspan="3">—</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </main>
 
     <div class="toast" id="toast"></div>

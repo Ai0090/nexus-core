@@ -1,6 +1,6 @@
 use crate::rest::RestState;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use serde::Deserialize;
 
@@ -9,7 +9,22 @@ struct GossipRequest {
     message: String,
 }
 
-pub async fn post_admin_gossip(State(state): State<RestState>, body: String) -> impl IntoResponse {
+pub async fn post_admin_gossip(
+    State(state): State<RestState>,
+    headers: HeaderMap,
+    body: String,
+) -> impl IntoResponse {
+    if crate::rest::helpers::mainnet_strict() {
+        return (
+            StatusCode::FORBIDDEN,
+            "POST /admin/gossip is disabled on mainnet",
+        )
+            .into_response();
+    }
+    if let Err(resp) = crate::rest::helpers::require_admin_bearer(&headers) {
+        return resp;
+    }
+
     let msg = if let Ok(req) = serde_json::from_str::<GossipRequest>(&body) {
         req.message
     } else {

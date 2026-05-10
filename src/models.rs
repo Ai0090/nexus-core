@@ -4,12 +4,18 @@ use serde::{Deserialize, Serialize};
 /// Network-wide state sync events carried over libp2p gossipsub.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NetworkEvent {
-    /// A mined block containing one or more signed transactions.
+    /// A mined block containing zero or more signed transactions.
     ///
     /// Receiver nodes should apply it idempotently (per-tx) without re-broadcast.
     BlockMined {
         block_height: u64,
         block_id: String,
+        #[serde(default)]
+        parent_block_id: Option<String>,
+        producer_id: String,
+        base_reward_micro: u64,
+        compute_reward_micro: u64,
+        total_reward_micro: u64,
         state_root: String,
         txs: Vec<SignedTxEnvelopeV1>,
     },

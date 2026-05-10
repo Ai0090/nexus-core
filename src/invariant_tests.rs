@@ -36,7 +36,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "legacy founder/fee balance assertions; superseded by phase2 protocol fee routing"]
     fn founder_fee_is_credited_on_mint_and_transfer() {
         let _g = super::super::test_env::lock();
         let dir = tempfile::tempdir().unwrap();
@@ -46,23 +45,22 @@ mod tests {
             std::env::set_var("TET_PROTOCOL_FEE_BPS", "100");
             std::env::set_var("TET_DB_ENCRYPT", "false");
             std::env::set_var("TET_REQUIRE_ATTESTATION", "false");
+            std::env::set_var("TET_FOUNDER_CLIFF_MS", "0");
         }
         let ledger = Ledger::open(db.to_str().unwrap()).unwrap();
         ledger.init_genesis_founder_premine_from_env().unwrap();
         ledger.apply_genesis_allocation("founder").unwrap();
 
-        // Fund worker pool so transfers can be tested even when genesis is founder-only.
+        // Genesis mints full max supply, so tests must not mint again (would trip hard cap).
+        // Instead, fund the worker pool from founder (no inflation).
         ledger
-            .mint_reward_with_proof(
+            .transfer_no_fee(
+                "founder",
                 super::super::ledger::WALLET_SYSTEM_WORKER_POOL,
                 2_000_000,
-                b"energy:test",
-                None,
-                false,
             )
             .unwrap();
 
-        let founder_before = ledger.balance_micro("founder").unwrap();
         let fee_total_before = ledger.fee_total_micro().unwrap();
         let supply_before = ledger.total_supply_micro().unwrap();
         let burned_before = ledger.total_burned_micro().unwrap();
@@ -76,23 +74,17 @@ mod tests {
             )
             .unwrap();
         let fee = 10_000u64;
-        let (treasury0, burn0) = Ledger::split_protocol_fee_treasury_and_burn(fee);
+        let (_pool0, burn0) = Ledger::split_protocol_fee_treasury_and_burn(fee);
         let net = 1_000_000u64 - fee;
 
-        let founder_bal_after_mint = ledger.balance_micro("founder").unwrap();
-        assert_eq!(founder_bal_after_mint, founder_before + treasury0);
         assert_eq!(ledger.balance_micro("alice").unwrap(), net);
-        assert_eq!(
-            ledger.fee_total_micro().unwrap(),
-            fee_total_before + treasury0
-        );
+        assert_eq!(ledger.fee_total_micro().unwrap(), fee_total_before + fee);
         assert_eq!(ledger.total_burned_micro().unwrap(), burned_before + burn0);
         assert_eq!(
             ledger.total_supply_micro().unwrap(),
             supply_before.saturating_sub(burn0)
         );
 
-        let founder_before_xfer = ledger.balance_micro("founder").unwrap();
         let supply_mid = ledger.total_supply_micro().unwrap();
         let burned_mid = ledger.total_burned_micro().unwrap();
         let (t_net, t_fee) = ledger
@@ -100,11 +92,13 @@ mod tests {
             .unwrap();
         assert_eq!(t_fee, 5_000);
         assert_eq!(t_net, 495_000);
-        let (treasury1, burn1) = Ledger::split_protocol_fee_treasury_and_burn(t_fee);
+        let (_pool1, burn1) = Ledger::split_protocol_fee_treasury_and_burn(t_fee);
 
-        let founder_bal_after_xfer = ledger.balance_micro("founder").unwrap();
-        assert_eq!(founder_bal_after_xfer, founder_before_xfer + treasury1);
         assert_eq!(ledger.balance_micro("bob").unwrap(), t_net);
+        assert_eq!(
+            ledger.fee_total_micro().unwrap(),
+            fee_total_before + fee + t_fee
+        );
         assert_eq!(
             ledger.total_burned_micro().unwrap(),
             burned_mid.saturating_add(burn1)

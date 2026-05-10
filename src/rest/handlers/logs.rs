@@ -2,32 +2,71 @@ use crate::rest::RestState;
 use axum::{
     Json,
     extract::State,
+    http::StatusCode,
+    response::IntoResponse,
     response::sse::{Event, KeepAlive, Sse},
 };
-use futures::{Stream, StreamExt as _};
+use futures::StreamExt as _;
 use serde::Deserialize;
 use sha2::Digest as _;
-use std::convert::Infallible;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio_stream::wrappers::BroadcastStream;
 
-pub async fn get_logs_sse(
-    State(state): State<RestState>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+struct LogSseConnectionGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for LogSseConnectionGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+pub async fn get_logs_sse(State(state): State<RestState>) -> axum::response::Response {
+    let max_connections = std::env::var("TET_LOG_SSE_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(128);
+    let prev = state.log_sse_connections.fetch_add(1, Ordering::SeqCst);
+    if prev >= max_connections {
+        state.log_sse_connections.fetch_sub(1, Ordering::SeqCst);
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({
+                "error": "SSE_CONNECTION_LIMIT",
+                "message": "too many concurrent /logs SSE connections",
+                "max_connections": max_connections,
+            })),
+        )
+            .into_response();
+    }
+    let guard = LogSseConnectionGuard {
+        counter: state.log_sse_connections.clone(),
+    };
     let rx = state.log_tx.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|msg| async move {
-        match msg {
-            Ok(line) => Some(Ok(Event::default().data(line))),
-            // Lagged/closed: just skip; client will keep receiving future messages.
-            Err(_) => None,
+    let stream = BroadcastStream::new(rx).filter_map(move |msg| {
+        let _keepalive_guard = &guard;
+        async move {
+            match msg {
+                Ok(line) => Some(Ok::<Event, std::convert::Infallible>(
+                    Event::default().data(line),
+                )),
+                // Lagged/closed: just skip; client will keep receiving future messages.
+                Err(_) => None,
+            }
         }
     });
 
-    Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(10))
-            .text("keepalive"),
-    )
+    Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(10))
+                .text("keepalive"),
+        )
+        .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,6 +124,7 @@ async fn run_zkvm_or_simulate(
         // Best-effort real proof generation; fall back to simulation on error.
         let prompt_prove = prompt.clone();
         match tokio::task::spawn_blocking(move || {
+            use risc0_zkvm::sha::Digestible as _;
             use risc0_zkvm::{ExecutorEnv, default_prover};
             let env = ExecutorEnv::builder()
                 .write(&prompt_prove)

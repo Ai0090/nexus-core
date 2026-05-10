@@ -85,6 +85,10 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
             axum::routing::get(super::handlers::telemetry::get_local_telemetry),
         )
         .route(
+            "/metrics",
+            axum::routing::get(super::handlers::metrics::get_metrics),
+        )
+        .route(
             "/wallet/mnemonic/new",
             axum::routing::get(super::handlers::wallet::get_wallet_mnemonic_new)
                 .post(super::handlers::wallet::post_wallet_new),
@@ -128,6 +132,18 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
         .route(
             "/ledger/me",
             axum::routing::get(super::handlers::ledger::get_ledger_me),
+        )
+        .route(
+            "/ledger/state",
+            axum::routing::get(super::handlers::ledger::get_ledger_state),
+        )
+        .route(
+            "/ledger/blocks",
+            axum::routing::get(super::handlers::ledger::get_ledger_blocks),
+        )
+        .route(
+            "/ledger/block/:height",
+            axum::routing::get(super::handlers::ledger::get_ledger_block),
         )
         .route(
             "/genesis/1000/status",
@@ -227,6 +243,10 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
             axum::routing::get(super::handlers::ledger::get_explorer_events),
         )
         .route(
+            "/explorer/tx/:hash",
+            axum::routing::get(super::handlers::ledger::get_explorer_tx),
+        )
+        .route(
             "/vault/history",
             axum::routing::get(super::handlers::ledger::get_vault_history),
         )
@@ -242,6 +262,10 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
         .route(
             "/enterprise/inference",
             axum::routing::post(super::handlers::enterprise::post_enterprise_inference),
+        )
+        .route(
+            "/enterprise/inference/submit",
+            axum::routing::post(super::handlers::enterprise::post_enterprise_inference_submit),
         )
         .route(
             "/worker/register",
@@ -278,6 +302,10 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
         .route(
             "/worker/stats/:wallet",
             axum::routing::get(super::handlers::worker::get_worker_stats),
+        )
+        .route(
+            "/worker/cockpit/:wallet",
+            axum::routing::get(super::handlers::worker::get_worker_cockpit),
         )
         .route(
             "/worker/pending/:wallet",

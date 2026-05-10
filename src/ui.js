@@ -226,6 +226,8 @@ function setScreens(which) {
   if (landing) landing.hidden = onDash;
   if (dash) dash.hidden = !onDash;
   if (dashBody) dashBody.hidden = !onDash;
+  if (onDash) startExplorerPolling();
+  else stopExplorerPolling();
 }
 
 function setLoggedIn(v) {
@@ -312,6 +314,85 @@ async function refreshWalletUi() {
   } catch (e) {
     if (hintEl) hintEl.textContent = "Unable to load wallet balance from core.";
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Explorer (overview + latest blocks)
+// ─────────────────────────────────────────────────────────────────────────────
+let _explorerTimerState = null;
+let _explorerTimerBlocks = null;
+
+function stopExplorerPolling() {
+  if (_explorerTimerState) clearInterval(_explorerTimerState);
+  if (_explorerTimerBlocks) clearInterval(_explorerTimerBlocks);
+  _explorerTimerState = null;
+  _explorerTimerBlocks = null;
+}
+
+async function refreshExplorerOverview() {
+  const elH = $("explBlockHeight");
+  const elM = $("explMempoolLen");
+  const elS = $("explStateRoot");
+  if (!elH || !elM || !elS) return;
+  try {
+    const v = await fetchJsonLoose(coreApi("/ledger/state"));
+    elH.textContent = String(v.block_height ?? "—");
+    elM.textContent = String(v.mempool_len ?? "—");
+    elS.textContent = String(v.state_root ?? "—");
+  } catch (e) {
+    elH.textContent = "—";
+    elM.textContent = "—";
+    elS.textContent = "—";
+  }
+}
+
+function _mkTd(text, mono = false) {
+  const td = document.createElement("td");
+  if (mono) td.className = "mono";
+  td.textContent = String(text ?? "—");
+  return td;
+}
+
+async function refreshExplorerBlocks() {
+  const tbody = $("explBlocksTbody");
+  const hint = $("explBlocksHint");
+  if (!tbody) return;
+  try {
+    const v = await fetchJsonLoose(coreApi("/ledger/blocks"));
+    const rows = Array.isArray(v) ? v : [];
+    tbody.innerHTML = "";
+    if (!rows.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 3;
+      td.className = "mono";
+      td.textContent = "No blocks mined yet.";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    } else {
+      for (const b of rows) {
+        const tr = document.createElement("tr");
+        tr.appendChild(_mkTd(b.height, true));
+        tr.appendChild(_mkTd(b.tx_count, true));
+        tr.appendChild(_mkTd(b.state_root, true));
+        tbody.appendChild(tr);
+      }
+    }
+    if (hint) hint.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    if (hint) hint.textContent = "Error (retrying)…";
+  }
+}
+
+function startExplorerPolling() {
+  // Avoid duplicate timers.
+  if (_explorerTimerState || _explorerTimerBlocks) return;
+  // Prime immediately.
+  void refreshExplorerOverview();
+  void refreshExplorerBlocks();
+  // Polling cadence: overview faster, blocks slightly slower.
+  _explorerTimerState = setInterval(() => void refreshExplorerOverview(), 3500);
+  _explorerTimerBlocks = setInterval(() => void refreshExplorerBlocks(), 5000);
 }
 
 function wireLanding() {
@@ -408,6 +489,7 @@ function wireLogout() {
   b.addEventListener("click", () => {
     setLoggedIn(false);
     setScreens("landing");
+    stopExplorerPolling();
     showToast("Logged out.");
   });
 }

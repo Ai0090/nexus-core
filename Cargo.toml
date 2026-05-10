@@ -30,7 +30,7 @@ hkdf = "0.12"
 pqcrypto-kyber = "0.8"
 pqcrypto-traits = "0.3"
 
-libp2p = { version = "0.55", features = ["tokio", "tcp", "dns", "noise", "yamux", "mdns", "ping", "kad", "gossipsub", "identify", "request-response", "macros", "autonat", "relay", "dcutr"] }
+libp2p = { version = "0.55", features = ["tokio", "tcp", "dns", "noise", "yamux", "mdns", "ping", "kad", "gossipsub", "identify", "request-response", "json", "macros", "autonat", "relay", "dcutr"] }
 futures = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 rand_core = "0.6"
@@ -47,6 +47,9 @@ anyhow = "1.0.102"
 once_cell = "1"
 log = "0.4"
 env_logger = "0.10"
+tracing = "0.1"
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ["client"] }
 methods = { path = "../methods" }
 nexus-protocol = { path = "../nexus-protocol" }

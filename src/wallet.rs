@@ -7,6 +7,19 @@ use rand_core::{OsRng, RngCore};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
+const STEVEMON: u64 = 1_000_000;
+const MAX_SUPPLY_MICRO: u64 = 10_000_000_000u64 * STEVEMON;
+const GENESIS_FOUNDER_SHARE_MICRO: u64 = 2_500_000_000u64 * STEVEMON;
+const GENESIS_WORKER_POOL_SHARE_MICRO: u64 = 5_000_000_000u64 * STEVEMON;
+const GENESIS_ECOSYSTEM_SHARE_MICRO: u64 = 2_500_000_000u64 * STEVEMON;
+const GENESIS_PROTOCOL_RESERVE_SHARE_MICRO: u64 = 0;
+const WALLET_SYSTEM_WORKER_POOL: &str = "system:worker_pool";
+const WALLET_ECOSYSTEM: &str = "0000000000000000000000000000000000000000000000000000000000000002";
+const WALLET_PROTOCOL_RESERVE: &str =
+    "0000000000000000000000000000000000000000000000000000000000000003";
+const GENESIS_FOUNDER_DEV_PUBLIC_HEX: &str =
+    "57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0";
+
 #[derive(Debug, thiserror::Error)]
 pub enum WalletError {
     #[error("invalid mnemonic")]
@@ -138,6 +151,65 @@ pub fn infer_mldsa_mode_from_raw_pubkey(pk: &[u8]) -> Option<DilithiumMode> {
     }
 }
 
+pub fn mainnet_env_enabled() -> bool {
+    std::env::var("TET_MAINNET")
+        .ok()
+        .as_deref()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+pub fn chain_id_from_env() -> String {
+    std::env::var("TET_CHAIN_ID")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            if mainnet_env_enabled() {
+                "tet-mainnet-1".to_string()
+            } else {
+                "tet-local-dev".to_string()
+            }
+        })
+}
+
+fn expected_genesis_founder_wallet_from_env() -> String {
+    std::env::var("TET_GENESIS_FOUNDER_WALLET_ID")
+        .ok()
+        .or_else(|| std::env::var("TET_FOUNDER_WALLET").ok())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| GENESIS_FOUNDER_DEV_PUBLIC_HEX.to_string())
+}
+
+pub fn deterministic_genesis_hash(founder_wallet_id: &str) -> String {
+    let founder = founder_wallet_id.trim().to_ascii_lowercase();
+    let payload = format!(
+        "tet-genesis-v1|chain_id={}|founder={}|founder_micro={}|worker_pool={}|worker_pool_micro={}|ecosystem={}|ecosystem_micro={}|reserve={}|reserve_micro={}|max_supply_micro={}",
+        chain_id_from_env(),
+        founder,
+        GENESIS_FOUNDER_SHARE_MICRO,
+        WALLET_SYSTEM_WORKER_POOL,
+        GENESIS_WORKER_POOL_SHARE_MICRO,
+        WALLET_ECOSYSTEM,
+        GENESIS_ECOSYSTEM_SHARE_MICRO,
+        WALLET_PROTOCOL_RESERVE,
+        GENESIS_PROTOCOL_RESERVE_SHARE_MICRO,
+        MAX_SUPPLY_MICRO,
+    );
+    format!("0x{}", hex::encode(Sha256::digest(payload.as_bytes())))
+}
+
+pub fn expected_genesis_hash_from_env() -> String {
+    if let Ok(h) = std::env::var("TET_GENESIS_HASH") {
+        let h = h.trim().to_ascii_lowercase();
+        if !h.is_empty() {
+            return h;
+        }
+    }
+    deterministic_genesis_hash(&expected_genesis_founder_wallet_from_env())
+}
+
 /// Verify detached ML-DSA signature; pubkey/sig are STANDARD base64 over **raw** FIPS-204 bytes (no mode prefix).
 pub fn verify_mldsa_b64(pubkey_b64: &str, sig_b64: &str, msg: &[u8]) -> Result<(), String> {
     let pk = base64::engine::general_purpose::STANDARD
@@ -244,6 +316,23 @@ pub fn recover_from_mnemonic_12(mnemonic: &str) -> Result<WalletInfo, WalletErro
     wallet_info_from_mnemonic(m, false)
 }
 
+/// Generate a new wallet from fresh random entropy.
+///
+/// - `words`: 12 or 24.
+/// - Returns `WalletInfo` including the mnemonic (for secure backup).
+pub fn generate_new_wallet(words: u16) -> Result<WalletInfo, WalletError> {
+    let entropy_len = match words {
+        12 => 16, // 128-bit entropy
+        24 => 32, // 256-bit entropy
+        _ => return Err(WalletError::InvalidMnemonic),
+    };
+    let mut entropy = vec![0u8; entropy_len];
+    OsRng.fill_bytes(&mut entropy);
+    let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy)
+        .map_err(|_| WalletError::InvalidMnemonic)?;
+    wallet_info_from_mnemonic(mnemonic, true)
+}
+
 pub fn ed25519_signing_key_from_mnemonic(mnemonic: &str) -> Result<SigningKey, WalletError> {
     let m = Mnemonic::parse_in(Language::English, mnemonic)
         .map_err(|_| WalletError::InvalidMnemonic)?;
@@ -260,7 +349,12 @@ pub fn transfer_hybrid_auth_message_bytes(
 ) -> Vec<u8> {
     let t = to_wallet.trim().to_ascii_lowercase();
     let p = mldsa_pubkey_b64.trim();
-    format!("tet xfer hybrid v1|{t}|{amount_micro}|{nonce}|{p}").into_bytes()
+    format!(
+        "tet xfer hybrid v1|chain_id={}|genesis_hash={}|{t}|{amount_micro}|{nonce}|{p}",
+        chain_id_from_env(),
+        expected_genesis_hash_from_env(),
+    )
+    .into_bytes()
 }
 
 pub fn founder_genesis_hybrid_auth_message_bytes(
@@ -269,7 +363,12 @@ pub fn founder_genesis_hybrid_auth_message_bytes(
 ) -> Vec<u8> {
     let w = founder_wallet_id.trim().to_ascii_lowercase();
     let p = mldsa_pubkey_b64.trim();
-    format!("tet founder genesis hybrid v1|{w}|{p}").into_bytes()
+    format!(
+        "tet founder genesis hybrid v1|chain_id={}|genesis_hash={}|{w}|{p}",
+        chain_id_from_env(),
+        expected_genesis_hash_from_env(),
+    )
+    .into_bytes()
 }
 
 pub fn genesis_1k_claim_hybrid_auth_message_bytes(
@@ -278,7 +377,12 @@ pub fn genesis_1k_claim_hybrid_auth_message_bytes(
 ) -> Vec<u8> {
     let w = wallet_id.trim().to_ascii_lowercase();
     let p = mldsa_pubkey_b64.trim();
-    format!("tet genesis1k claim hybrid v1|{w}|{p}").into_bytes()
+    format!(
+        "tet genesis1k claim hybrid v1|chain_id={}|genesis_hash={}|{w}|{p}",
+        chain_id_from_env(),
+        expected_genesis_hash_from_env(),
+    )
+    .into_bytes()
 }
 
 pub fn initial_airdrop_claim_hybrid_auth_message_bytes(
@@ -287,7 +391,12 @@ pub fn initial_airdrop_claim_hybrid_auth_message_bytes(
 ) -> Vec<u8> {
     let w = wallet_id.trim().to_ascii_lowercase();
     let p = mldsa_pubkey_b64.trim();
-    format!("tet initial airdrop claim hybrid v1|{w}|{p}").into_bytes()
+    format!(
+        "tet initial airdrop claim hybrid v1|chain_id={}|genesis_hash={}|{w}|{p}",
+        chain_id_from_env(),
+        expected_genesis_hash_from_env(),
+    )
+    .into_bytes()
 }
 
 pub fn founder_withdraw_treasury_hybrid_auth_message_bytes(
@@ -298,7 +407,12 @@ pub fn founder_withdraw_treasury_hybrid_auth_message_bytes(
 ) -> Vec<u8> {
     let w = founder_wallet_id.trim().to_ascii_lowercase();
     let p = mldsa_pubkey_b64.trim();
-    format!("tet founder withdraw treasury hybrid v1|{w}|{amount_micro}|{nonce}|{p}").into_bytes()
+    format!(
+        "tet founder withdraw treasury hybrid v1|chain_id={}|genesis_hash={}|{w}|{amount_micro}|{nonce}|{p}",
+        chain_id_from_env(),
+        expected_genesis_hash_from_env(),
+    )
+    .into_bytes()
 }
 
 pub fn enterprise_inference_hybrid_auth_message_bytes(
@@ -315,7 +429,12 @@ pub fn enterprise_inference_hybrid_auth_message_bytes(
     let h = prompt_sha256_hex.trim().to_ascii_lowercase();
     let m = model.trim();
     let att = if attestation_required { 1u8 } else { 0u8 };
-    format!("tet enterprise inference v1|{w}|{nonce}|{amount_micro}|{h}|{m}|{att}|{p}").into_bytes()
+    format!(
+        "tet enterprise inference v1|chain_id={}|genesis_hash={}|{w}|{nonce}|{amount_micro}|{h}|{m}|{att}|{p}",
+        chain_id_from_env(),
+        expected_genesis_hash_from_env(),
+    )
+    .into_bytes()
 }
 
 /// Hybrid signed payload for `POST /ai/infer` and `POST /ai/utility` (Ed25519 + ML-DSA), **always** on mainnet nodes.
@@ -329,7 +448,12 @@ pub fn worker_bond_stake_hybrid_auth_message_bytes(
 ) -> Vec<u8> {
     let w = wallet_id_hex.trim().to_ascii_lowercase();
     let p = mldsa_pubkey_b64.trim();
-    format!("tet worker bond stake v1|{w}|{amount_micro}|{nonce}|{p}").into_bytes()
+    format!(
+        "tet worker bond stake v1|chain_id={}|genesis_hash={}|{w}|{amount_micro}|{nonce}|{p}",
+        chain_id_from_env(),
+        expected_genesis_hash_from_env(),
+    )
+    .into_bytes()
 }
 
 /// Canonical preimage for `POST /ledger/unstake` worker bond release.
@@ -341,7 +465,12 @@ pub fn worker_bond_unstake_hybrid_auth_message_bytes(
 ) -> Vec<u8> {
     let w = wallet_id_hex.trim().to_ascii_lowercase();
     let p = mldsa_pubkey_b64.trim();
-    format!("tet worker bond unstake v1|{w}|{amount_micro}|{nonce}|{p}").into_bytes()
+    format!(
+        "tet worker bond unstake v1|chain_id={}|genesis_hash={}|{w}|{amount_micro}|{nonce}|{p}",
+        chain_id_from_env(),
+        expected_genesis_hash_from_env(),
+    )
+    .into_bytes()
 }
 
 pub fn ai_infer_hybrid_auth_message_bytes(
@@ -353,5 +482,47 @@ pub fn ai_infer_hybrid_auth_message_bytes(
     use sha2::{Digest, Sha256};
     let w = wallet_id_hex.trim().to_ascii_lowercase();
     let ph = hex::encode(Sha256::digest(prompt.as_bytes()));
-    format!("tet ai infer hybrid v1|{w}|{flops}|{nonce}|{ph}").into_bytes()
+    format!(
+        "tet ai infer hybrid v1|chain_id={}|genesis_hash={}|{w}|{flops}|{nonce}|{ph}",
+        chain_id_from_env(),
+        expected_genesis_hash_from_env(),
+    )
+    .into_bytes()
+}
+
+pub fn tx_v1_auth_message_bytes(
+    tx: &crate::protocol::TxV1,
+    mldsa_pubkey_b64: &str,
+) -> Result<Vec<u8>, String> {
+    match tx {
+        crate::protocol::TxV1::EnterpriseInference {
+            enterprise_wallet_id,
+            model,
+            amount_micro,
+            nonce,
+            prompt_sha256_hex,
+            attestation_required,
+            ..
+        } => Ok(enterprise_inference_hybrid_auth_message_bytes(
+            enterprise_wallet_id,
+            *nonce,
+            *amount_micro,
+            prompt_sha256_hex,
+            model,
+            *attestation_required,
+            mldsa_pubkey_b64,
+        )),
+        _ => {
+            let canonical =
+                serde_json::to_string(tx).map_err(|_| "tx serialization failed".to_string())?;
+            Ok(format!(
+                "tet tx v1|chain_id={}|genesis_hash={}|mldsa={}|tx={}",
+                chain_id_from_env(),
+                expected_genesis_hash_from_env(),
+                mldsa_pubkey_b64.trim(),
+                canonical
+            )
+            .into_bytes())
+        }
+    }
 }

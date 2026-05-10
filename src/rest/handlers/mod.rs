@@ -8,6 +8,7 @@ pub mod founder;
 pub mod founding;
 pub mod ledger;
 pub mod logs;
+pub mod metrics;
 pub mod network;
 pub mod pages;
 pub mod phase4;

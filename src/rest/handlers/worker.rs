@@ -389,6 +389,159 @@ async fn get_worker_pending_impl(Path(wallet): Path<String>) -> impl IntoRespons
         .into_response()
 }
 
+#[derive(Serialize)]
+struct WorkerCockpitDaemonResp {
+    enabled: bool,
+    poll_ms: u64,
+    current_task_count: u64,
+}
+
+#[derive(Serialize)]
+struct WorkerCockpitHardwareResp {
+    gpu_detected: bool,
+    gpu_hint: String,
+    tflops_est: f64,
+    caac_latency_ms: Option<u64>,
+    server_wall_ms: Option<u64>,
+    cpu_logical_cores: u32,
+    ram_total_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct WorkerCockpitResp {
+    wallet: String,
+    role: String,
+    online: bool,
+    balance_micro: u64,
+    estimated_total_rewards_micro: u64,
+    processed_task_count: u64,
+    zk_success_count: u64,
+    daemon: WorkerCockpitDaemonResp,
+    hardware: WorkerCockpitHardwareResp,
+    last_seen_ms: Option<u128>,
+}
+
+fn env_truthy(name: &str, default: bool) -> bool {
+    match std::env::var(name).ok().as_deref().map(str::trim) {
+        Some("0") | Some("false") | Some("FALSE") | Some("no") | Some("NO") => false,
+        Some("") => default,
+        Some(_) => true,
+        None => default,
+    }
+}
+
+fn estimate_tflops_from_caac(
+    registry_tflops: f64,
+    role: &str,
+    gpu_detected: bool,
+    cpu_logical_cores: u32,
+    ram_total_bytes: u64,
+) -> f64 {
+    if registry_tflops.is_finite() && registry_tflops > 0.0 {
+        return registry_tflops;
+    }
+    let ram_gib = (ram_total_bytes as f64) / (1024.0 * 1024.0 * 1024.0);
+    let cpu_floor = (cpu_logical_cores as f64 * 0.08).max(0.1);
+    let gpu_bonus = if gpu_detected { 8.0 } else { 0.0 };
+    let role_bonus = if role.eq_ignore_ascii_case("POC") {
+        1.5
+    } else {
+        0.0
+    };
+    (cpu_floor + gpu_bonus + role_bonus + ram_gib.min(128.0) * 0.01).max(0.0)
+}
+
+async fn get_worker_cockpit_impl(
+    State(state): State<RestState>,
+    Path(wallet): Path<String>,
+) -> impl IntoResponse {
+    let wallet = wallet.trim().to_ascii_lowercase();
+    if wallet.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "WALLET_REQUIRED",
+                "message": "wallet required"
+            })),
+        )
+            .into_response();
+    }
+
+    let ttl = std::env::var("TET_WORKER_HEARTBEAT_TTL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u128>().ok())
+        .unwrap_or(120_000);
+    let now_ms = crate::worker_network::now_ms();
+    let entry = {
+        let reg = std_lock(&state.workers);
+        reg.by_wallet.get(&wallet).cloned()
+    };
+    let online = entry
+        .as_ref()
+        .map(|e| now_ms.saturating_sub(e.last_seen_ms) <= ttl)
+        .unwrap_or(false);
+
+    let ledger_caac = state.ledger.caac_get_worker_record(&wallet);
+    let local_profile = crate::vision::caac::profile();
+    let local_role = crate::vision::caac::role_to_tag(local_profile.role).to_string();
+    let role = ledger_caac
+        .as_ref()
+        .map(|r| r.role.trim().to_ascii_uppercase())
+        .filter(|r| !r.is_empty())
+        .or_else(|| entry.as_ref().and_then(|e| e.caac_role.clone()))
+        .unwrap_or(local_role);
+
+    let balance_micro = state.ledger.balance_micro(&wallet).unwrap_or(0);
+    let (processed_task_count, zk_success_count, current_task_count) = state
+        .ledger
+        .ai_workload_cockpit_counts_for_worker(&wallet)
+        .unwrap_or((0, 0, 0));
+    let estimated_total_rewards_micro = balance_micro;
+    let daemon = WorkerCockpitDaemonResp {
+        enabled: env_truthy("TET_WORKER_DAEMON", true),
+        poll_ms: std::env::var("TET_WORKER_DAEMON_POLL_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(2_000),
+        current_task_count,
+    };
+
+    let registry_tflops = entry.as_ref().map(|e| e.tflops_est).unwrap_or(0.0);
+    let tflops_est = estimate_tflops_from_caac(
+        registry_tflops,
+        &role,
+        local_profile.hw.gpu_detected,
+        local_profile.hw.cpu_logical_cores,
+        local_profile.hw.ram_total_bytes,
+    );
+    let hardware = WorkerCockpitHardwareResp {
+        gpu_detected: local_profile.hw.gpu_detected,
+        gpu_hint: local_profile.hw.gpu_hint,
+        tflops_est,
+        caac_latency_ms: ledger_caac.as_ref().map(|r| r.latency_ms),
+        server_wall_ms: ledger_caac.as_ref().map(|r| r.server_wall_ms),
+        cpu_logical_cores: local_profile.hw.cpu_logical_cores,
+        ram_total_bytes: local_profile.hw.ram_total_bytes,
+    };
+
+    (
+        StatusCode::OK,
+        Json(WorkerCockpitResp {
+            wallet,
+            role,
+            online,
+            balance_micro,
+            estimated_total_rewards_micro,
+            processed_task_count,
+            zk_success_count,
+            daemon,
+            hardware,
+            last_seen_ms: entry.as_ref().map(|e| e.last_seen_ms),
+        }),
+    )
+        .into_response()
+}
+
 pub async fn post_worker_register(
     State(state): State<RestState>,
     Json(req): Json<WorkerRegisterReq>,
@@ -442,4 +595,11 @@ pub async fn get_worker_stats(
 
 pub async fn get_worker_pending(Path(wallet): Path<String>) -> impl IntoResponse {
     get_worker_pending_impl(Path(wallet)).await
+}
+
+pub async fn get_worker_cockpit(
+    State(state): State<RestState>,
+    Path(wallet): Path<String>,
+) -> impl IntoResponse {
+    get_worker_cockpit_impl(State(state), Path(wallet)).await
 }

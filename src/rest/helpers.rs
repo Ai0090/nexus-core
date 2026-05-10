@@ -244,7 +244,8 @@ pub fn verify_envelope_v1(env: &SignedTxEnvelopeV1) -> Result<Vec<u8>, String> {
     if env.v != 1 {
         return Err("unsupported envelope version".into());
     }
-    let tx_bytes = match &env.tx {
+    let tx_bytes = crate::wallet::tx_v1_auth_message_bytes(&env.tx, &env.sig.mldsa_pubkey_b64)?;
+    let legacy_tx_bytes = match &env.tx {
         TxV1::EnterpriseInference {
             enterprise_wallet_id,
             model,
@@ -276,14 +277,37 @@ pub fn verify_envelope_v1(env: &SignedTxEnvelopeV1) -> Result<Vec<u8>, String> {
         }
     }
 
-    crate::quantum_shield::verify_ed25519(
+    let canonical_ok = crate::quantum_shield::verify_ed25519(
         &env.sig.ed25519_pubkey_hex,
         &env.sig.ed25519_sig_b64,
         &tx_bytes,
     )
-    .map_err(|e| e.to_string())?;
-
-    crate::wallet::verify_mldsa_b64(&env.sig.mldsa_pubkey_b64, &env.sig.mldsa_sig_b64, &tx_bytes)?;
+    .is_ok()
+        && crate::wallet::verify_mldsa_b64(
+            &env.sig.mldsa_pubkey_b64,
+            &env.sig.mldsa_sig_b64,
+            &tx_bytes,
+        )
+        .is_ok();
+    let signed_tx_bytes = if canonical_ok {
+        tx_bytes.clone()
+    } else {
+        if mainnet_strict() {
+            return Err("invalid signature or missing chain_id/genesis_hash binding".into());
+        }
+        crate::quantum_shield::verify_ed25519(
+            &env.sig.ed25519_pubkey_hex,
+            &env.sig.ed25519_sig_b64,
+            &legacy_tx_bytes,
+        )
+        .map_err(|e| e.to_string())?;
+        crate::wallet::verify_mldsa_b64(
+            &env.sig.mldsa_pubkey_b64,
+            &env.sig.mldsa_sig_b64,
+            &legacy_tx_bytes,
+        )?;
+        legacy_tx_bytes.clone()
+    };
 
     let must_attest = mainnet_strict() || crate::attestation::attestation_required();
     if must_attest {
@@ -295,8 +319,8 @@ pub fn verify_envelope_v1(env: &SignedTxEnvelopeV1) -> Result<Vec<u8>, String> {
             platform: env.attestation.platform.clone(),
             report_b64: env.attestation.report_b64.clone(),
         };
-        verify_attestation_report(&report, &tx_bytes).map_err(|e| e.to_string())?;
+        verify_attestation_report(&report, &signed_tx_bytes).map_err(|e| e.to_string())?;
     }
 
-    Ok(tx_bytes)
+    Ok(signed_tx_bytes)
 }

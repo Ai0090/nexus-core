@@ -210,8 +210,8 @@ pub async fn get_vision_zk_court_params() -> impl IntoResponse {
     (StatusCode::OK, Json(crate::vision::zk_court::params_json())).into_response()
 }
 
-pub async fn get_vision_zk_court_challenges() -> impl IntoResponse {
-    let v = crate::vision::zk_court::list_open();
+pub async fn get_vision_zk_court_challenges(State(state): State<RestState>) -> impl IntoResponse {
+    let v = crate::vision::zk_court::list_open_persisted(state.ledger.as_ref());
     (StatusCode::OK, Json(v)).into_response()
 }
 

@@ -39,8 +39,9 @@ pub async fn post_enterprise_inference(
         prompt,
         model,
         amount_micro,
-        nonce: _nonce,
+        nonce,
         prompt_sha256_hex,
+        workload_flag: _,
         attestation_required,
     } = env.tx.clone()
     else {
@@ -95,6 +96,16 @@ pub async fn post_enterprise_inference(
             Json(serde_json::json!({
                 "error": "PROMPT_HASH_MISMATCH",
                 "message": "prompt does not match prompt_sha256_hex",
+            })),
+        )
+            .into_response();
+    }
+    if let Err(e) = state.ledger.ai_consume_nonce(&w, nonce) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "NONCE_REPLAY_OR_GAP",
+                "message": e.to_string(),
             })),
         )
             .into_response();
@@ -245,6 +256,120 @@ pub async fn post_enterprise_inference(
             "model": want_model,
             "attestation_required": attestation_required,
             "response": out,
+        })),
+    )
+        .into_response()
+}
+
+pub async fn post_enterprise_inference_submit(
+    State(state): State<RestState>,
+    _headers: HeaderMap,
+    Json(env): Json<SignedTxEnvelopeV1>,
+) -> axum::response::Response {
+    let _tx_bytes = match verify_envelope_v1(&env) {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "INVALID_ENVELOPE",
+                    "message": e,
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let TxV1::EnterpriseInference {
+        enterprise_wallet_id,
+        prompt: _,
+        model: _,
+        amount_micro,
+        nonce,
+        prompt_sha256_hex: _,
+        workload_flag,
+        attestation_required: _,
+    } = &env.tx
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "WRONG_TX_KIND",
+                "message": "expected tx.kind=enterprise_inference",
+            })),
+        )
+            .into_response();
+    };
+
+    if let Err(e) = crate::consensus::validate_enterprise_inference_tx(&env.tx) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "INVALID_ENTERPRISE_INFERENCE_TX",
+                "message": e,
+            })),
+        )
+            .into_response();
+    }
+    let workload_flag_value = *workload_flag;
+    if !env
+        .sig
+        .ed25519_pubkey_hex
+        .trim()
+        .eq_ignore_ascii_case(enterprise_wallet_id.trim())
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "ACTIVE_WALLET_MISMATCH",
+                "message": "enterprise_wallet_id must match envelope pubkey",
+            })),
+        )
+            .into_response();
+    }
+    let spendable = state
+        .ledger
+        .spendable_balance_micro_now(enterprise_wallet_id)
+        .unwrap_or(0);
+    if spendable < *amount_micro {
+        return (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({
+                "error": "INSUFFICIENT_FUNDS",
+                "message": "insufficient spendable balance for declared AI workload amount",
+            })),
+        )
+            .into_response();
+    }
+    if let Err(e) = state.ledger.ai_consume_nonce(enterprise_wallet_id, *nonce) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "NONCE_REPLAY_OR_GAP",
+                "message": e.to_string(),
+            })),
+        )
+            .into_response();
+    }
+
+    if let Err(e) = state.enqueue_mempool_tx(env).await {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({
+                "error": "MEMPOOL_FULL",
+                "message": e.to_string(),
+            })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "ok": true,
+            "status": "pending",
+            "queued": true,
+            "workload_flag": workload_flag_value,
         })),
     )
         .into_response()

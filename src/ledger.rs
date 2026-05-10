@@ -7,6 +7,7 @@ use sha2::{Digest as _, Sha256};
 use sled::transaction::{
     ConflictableTransactionError, TransactionError, Transactional, TransactionalTree,
 };
+use std::collections::{BTreeMap, BTreeSet};
 use zeroize::{Zeroize as _, ZeroizeOnDrop};
 
 mod crypto;
@@ -45,19 +46,79 @@ pub const GENESIS_FOUNDER_PREMINE_TET: u64 = 2_500_000_000;
 pub const GENESIS_FOUNDER_SHARE_MICRO: u64 = GENESIS_FOUNDER_PREMINE_TET * STEVEMON;
 /// DEX liquidity treasury at genesis (optional tranche; MVP stays 0).
 pub const GENESIS_DEX_TREASURY_MICRO: u64 = 0;
-/// **75%** system-locked tranche minted to [`WALLET_SYSTEM_WORKER_POOL`] at genesis (7.5B TET).
-pub const GENESIS_SYSTEM_LOCKED_TET: u64 = 7_500_000_000;
+/// **50%** system-locked tranche minted to [`WALLET_SYSTEM_WORKER_POOL`] at genesis (5B TET).
+pub const GENESIS_SYSTEM_LOCKED_TET: u64 = 5_000_000_000;
 pub const GENESIS_WORKER_POOL_SHARE_MICRO: u64 = GENESIS_SYSTEM_LOCKED_TET * STEVEMON;
-pub const GENESIS_ECOSYSTEM_SHARE_MICRO: u64 = 0;
+/// **25%** ecosystem treasury tranche minted to [`WALLET_ECOSYSTEM`] at genesis (2.5B TET).
+pub const GENESIS_ECOSYSTEM_SHARE_MICRO: u64 = 2_500_000_000u64 * STEVEMON;
 pub const WALLET_PROTOCOL_RESERVE: &str =
     "0000000000000000000000000000000000000000000000000000000000000003";
 pub const GENESIS_PROTOCOL_RESERVE_SHARE_MICRO: u64 = 0;
 
-/// Total circulating mint at genesis: 25% founder + 75% system pool = **100亿 TET** ([`MAX_SUPPLY_MICRO`]).
+/// Total circulating mint at genesis: 25% founder + 50% worker pool + 25% ecosystem = **100亿 TET**.
 pub const GENESIS_TOTAL_MINT_MICRO: u64 =
-    GENESIS_FOUNDER_SHARE_MICRO + GENESIS_WORKER_POOL_SHARE_MICRO;
+    GENESIS_FOUNDER_SHARE_MICRO + GENESIS_WORKER_POOL_SHARE_MICRO + GENESIS_ECOSYSTEM_SHARE_MICRO;
 
 const _: () = assert!(GENESIS_TOTAL_MINT_MICRO == MAX_SUPPLY_MICRO);
+
+pub fn mainnet_env_enabled() -> bool {
+    std::env::var("TET_MAINNET")
+        .ok()
+        .as_deref()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+pub fn chain_id_from_env() -> String {
+    std::env::var("TET_CHAIN_ID")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            if mainnet_env_enabled() {
+                "tet-mainnet-1".to_string()
+            } else {
+                "tet-local-dev".to_string()
+            }
+        })
+}
+
+pub fn deterministic_genesis_hash(founder_wallet_id: &str) -> String {
+    let founder = founder_wallet_id.trim().to_ascii_lowercase();
+    let payload = format!(
+        "tet-genesis-v1|chain_id={}|founder={}|founder_micro={}|worker_pool={}|worker_pool_micro={}|ecosystem={}|ecosystem_micro={}|reserve={}|reserve_micro={}|max_supply_micro={}",
+        chain_id_from_env(),
+        founder,
+        GENESIS_FOUNDER_SHARE_MICRO,
+        WALLET_SYSTEM_WORKER_POOL,
+        GENESIS_WORKER_POOL_SHARE_MICRO,
+        WALLET_ECOSYSTEM,
+        GENESIS_ECOSYSTEM_SHARE_MICRO,
+        WALLET_PROTOCOL_RESERVE,
+        GENESIS_PROTOCOL_RESERVE_SHARE_MICRO,
+        MAX_SUPPLY_MICRO,
+    );
+    format!("0x{}", hex::encode(Sha256::digest(payload.as_bytes())))
+}
+
+pub fn expected_genesis_founder_wallet_from_env() -> String {
+    std::env::var("TET_GENESIS_FOUNDER_WALLET_ID")
+        .ok()
+        .or_else(|| std::env::var("TET_FOUNDER_WALLET").ok())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| GENESIS_FOUNDER_DEV_PUBLIC_HEX.to_string())
+}
+
+pub fn expected_genesis_hash_from_env() -> String {
+    if let Ok(h) = std::env::var("TET_GENESIS_HASH") {
+        let h = h.trim().to_ascii_lowercase();
+        if !h.is_empty() {
+            return h;
+        }
+    }
+    deterministic_genesis_hash(&expected_genesis_founder_wallet_from_env())
+}
 
 /// Genesis Worker grant: 100,000 TET × 1,000 nodes = 100,000,000 TET (funded from `system:worker_pool` at genesis).
 pub const GENESIS_GUARDIANS_TOTAL: u64 = 10_000;
@@ -107,6 +168,7 @@ const META_AUDIT_SEQ: &[u8] = b"audit_seq_v1";
 const META_INFERENCE_BLOCK_HEIGHT: &[u8] = b"inference_block_height_u64_v1";
 /// Phase 2: mined block height for transfer batching.
 const META_LEDGER_BLOCK_HEIGHT: &[u8] = b"ledger_block_height_u64_v1";
+const META_GENESIS_HASH: &[u8] = b"genesis_hash_v1";
 /// Wall-clock ms after last inference settlement commit (consensus spacing).
 const META_INFER_CONSENSUS_LAST_MS: &[u8] = b"infer_consensus_last_wall_ms_v1";
 const META_DB_MAGIC: &[u8] = b"db_magic_v1";
@@ -116,6 +178,7 @@ const META_STEVEMON_PER_TET: &[u8] = b"stevemon_per_tet_v1";
 const META_AI_NONCE_PREFIX: &[u8] = b"ai_nonce_v1:";
 /// Idempotency marker for remotely-applied gossipsub transfers: `remote_tx_applied_v1:{tx_hash}`.
 const META_REMOTE_TX_APPLIED_PREFIX: &[u8] = b"remote_tx_applied_v1:";
+const META_AI_WORKLOAD_TX_PREFIX: &[u8] = b"ai_workload_tx_v1:";
 const DB_MAGIC: &[u8] = b"tet-db-v1";
 // Legacy magic bytes from earlier snapshots (kept for seamless migration).
 // Stored as raw bytes to avoid brand leakage in source strings.
@@ -139,6 +202,41 @@ pub struct CaacWorkerRecord {
     pub seed_hex: String,
     pub server_wall_ms: u64,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AiWorkloadTask {
+    #[serde(default = "default_ai_workload_record_version")]
+    pub v: u32,
+    #[serde(default = "default_enterprise_inference_demand_kind")]
+    pub kind: String,
+    pub tx_hash: String,
+    pub enterprise_wallet_id: String,
+    #[serde(default)]
+    pub prompt: String,
+    pub prompt_sha256_hex: String,
+    pub model: String,
+    pub amount_micro: u64,
+    pub workload_flag: u8,
+    #[serde(default)]
+    pub block_height: u64,
+    #[serde(default)]
+    pub processed: bool,
+    #[serde(default)]
+    pub processed_by: Option<String>,
+    #[serde(default)]
+    pub processed_receipt_hash_hex: Option<String>,
+    #[serde(default)]
+    pub processed_at_ms: Option<u128>,
+}
+
+fn default_ai_workload_record_version() -> u32 {
+    1
+}
+
+fn default_enterprise_inference_demand_kind() -> String {
+    "enterprise_inference_demand".to_string()
+}
+
 /// Last committed transfer nonce per wallet (replay protection for signed HTTP transfers).
 const META_WALLET_NONCE_PREFIX: &[u8] = b"wallet_nonce_v1:";
 /// Per-wallet staked balance (micro-units) — economic security layer.
@@ -228,8 +326,109 @@ pub struct Ledger {
     faucet_ip_rl: sled::Tree,
     /// Worker Sybil bond: `wallet_id` utf8 → encrypted `u64` micro (locked; not spendable until unstake).
     worker_stakes: sled::Tree,
+    /// Mined block summaries for explorer UI (encrypted JSON).
+    blocks: sled::Tree,
+    /// Any known block by `block_id` (canonical or fork candidate), encrypted [`BlockRecordV1`] JSON.
+    blocks_by_id: sled::Tree,
+    /// Canonical block id by big-endian height.
+    canonical_by_height: sled::Tree,
+    /// Chain tip metadata (`canonical` key -> encrypted [`ChainTipV1`] JSON).
+    chain_tip: sled::Tree,
+    /// Per-block raw old values required to unwind canonical history safely.
+    block_undo: sled::Tree,
+    /// Tx hash (`0x` + sha256 hex) -> encrypted [`TxIndexRecordV1`] JSON.
+    tx_index: sled::Tree,
+    /// ZK-Court dispute state (`inference_id` -> encrypted JSON).
+    zkcourt_disputes: sled::Tree,
+    /// ZK-Court replay artifacts (`inference_id` -> encrypted JSON).
+    zkcourt_artifacts: sled::Tree,
+    /// ZK-Court challenger bonds (`inference_id:challenger` -> encrypted micro amount).
+    zkcourt_bonds: sled::Tree,
     enc_key: Option<EncKey>,
     snapshot_dir: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlockSummary {
+    pub height: u64,
+    pub block_id: String,
+    pub state_root: String,
+    pub tx_count: u64,
+    pub ts_ms: u128,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlockRewardRecordV1 {
+    pub base_reward_micro: u64,
+    pub compute_reward_micro: u64,
+    pub total_reward_micro: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlockRecordV1 {
+    pub v: u32,
+    pub height: u64,
+    pub block_id: String,
+    pub parent_block_id: Option<String>,
+    pub producer_id: String,
+    pub tx_hashes: Vec<String>,
+    pub txs: Vec<crate::protocol::SignedTxEnvelopeV1>,
+    pub state_root: String,
+    pub reward: BlockRewardRecordV1,
+    pub caac_weight: u64,
+    pub cumulative_weight: u128,
+    pub canonical: bool,
+    pub ts_ms: u128,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ChainTipV1 {
+    pub v: u32,
+    pub height: u64,
+    pub block_id: String,
+    pub cumulative_weight: u128,
+    pub state_root: String,
+    pub updated_at_ms: u128,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UndoKvV1 {
+    pub key: Vec<u8>,
+    /// Raw sled value before block apply. `None` means key did not exist and must be removed on unwind.
+    pub value: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlockUndoV1 {
+    pub v: u32,
+    pub block_id: String,
+    pub height: u64,
+    pub balances: Vec<UndoKvV1>,
+    pub meta: Vec<UndoKvV1>,
+    pub tx_index: Vec<UndoKvV1>,
+    pub canonical_by_height: Vec<UndoKvV1>,
+    pub chain_tip: Vec<UndoKvV1>,
+    pub blocks: Vec<UndoKvV1>,
+    pub created_at_ms: u128,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TxIndexRecordV1 {
+    pub v: u32,
+    pub hash: String,
+    pub block_height: u64,
+    pub tx_index: u64,
+    pub tx_kind: String,
+    pub workload_flag: u8,
+    pub signer_wallet: String,
+    #[serde(default = "default_tx_index_canonical")]
+    pub canonical: bool,
+    pub tx: crate::protocol::SignedTxEnvelopeV1,
+    pub indexed_at_ms: u128,
+}
+
+fn default_tx_index_canonical() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -387,10 +586,654 @@ struct VestLockV1 {
 }
 
 impl Ledger {
+    const CHAIN_TIP_CANONICAL_KEY: &'static [u8] = b"canonical";
+
+    fn blocks_key_be(height: u64) -> [u8; 8] {
+        height.to_be_bytes()
+    }
+
+    fn normalize_tx_hash(hash: &str) -> String {
+        let h = hash.trim().to_ascii_lowercase();
+        if let Some(rest) = h.strip_prefix("0x") {
+            format!("0x{rest}")
+        } else {
+            format!("0x{h}")
+        }
+    }
+
+    fn tx_kind(tx: &crate::protocol::TxV1) -> &'static str {
+        match tx {
+            crate::protocol::TxV1::SignerLink { .. } => "signer_link",
+            crate::protocol::TxV1::FoundingMemberEnroll { .. } => "founding_member_enroll",
+            crate::protocol::TxV1::Transfer { .. } => "transfer",
+            crate::protocol::TxV1::GenesisBridge { .. } => "genesis_bridge",
+            crate::protocol::TxV1::EnterpriseInference { .. } => "enterprise_inference",
+            crate::protocol::TxV1::VerifyZkProof { .. } => "verify_zk_proof",
+        }
+    }
+
+    fn undo_kvs(tree: &sled::Tree, keys: Vec<Vec<u8>>) -> Result<Vec<UndoKvV1>, LedgerError> {
+        let mut out = Vec::new();
+        let mut seen = std::collections::BTreeSet::<Vec<u8>>::new();
+        for key in keys {
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            out.push(UndoKvV1 {
+                value: tree.get(&key)?.map(|v| v.to_vec()),
+                key,
+            });
+        }
+        Ok(out)
+    }
+
+    fn restore_kvs(tree: &sled::Tree, kvs: &[UndoKvV1]) -> Result<(), LedgerError> {
+        for kv in kvs {
+            if let Some(v) = &kv.value {
+                tree.insert(&kv.key, v.as_slice())?;
+            } else {
+                tree.remove(&kv.key)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn prepare_block_undo(
+        &self,
+        block_id: &str,
+        height: u64,
+        txs: &[crate::protocol::SignedTxEnvelopeV1],
+        tx_hashes: &[String],
+        producer_id: &str,
+        reward_micro: u64,
+    ) -> Result<BlockUndoV1, LedgerError> {
+        let mut balance_keys: Vec<Vec<u8>> = Vec::new();
+        let mut meta_keys: Vec<Vec<u8>> = vec![META_LEDGER_BLOCK_HEIGHT.to_vec()];
+        let mut tx_index_keys: Vec<Vec<u8>> = Vec::new();
+
+        if reward_micro > 0 {
+            balance_keys.push(WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec());
+            balance_keys.push(producer_id.trim().to_ascii_lowercase().into_bytes());
+        }
+
+        for (env, tx_hash) in txs.iter().zip(tx_hashes.iter()) {
+            tx_index_keys.push(Self::normalize_tx_hash(tx_hash).into_bytes());
+            match &env.tx {
+                crate::protocol::TxV1::Transfer {
+                    from_wallet,
+                    to_wallet,
+                    amount_micro,
+                    fee_bps,
+                } => {
+                    balance_keys.push(from_wallet.trim().to_ascii_lowercase().into_bytes());
+                    balance_keys.push(to_wallet.trim().to_ascii_lowercase().into_bytes());
+                    let fee_micro = amount_micro.saturating_mul(*fee_bps) / 10_000;
+                    if fee_micro > 0 {
+                        balance_keys.push(WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec());
+                        balance_keys.push(self.ai_burn_wallet().into_bytes());
+                        meta_keys.push(META_TOTAL_SUPPLY.to_vec());
+                        meta_keys.push(META_TOTAL_BURNED.to_vec());
+                        meta_keys.push(META_FEE_TOTAL.to_vec());
+                    }
+                    meta_keys.push(Self::remote_tx_applied_meta_key(tx_hash));
+                }
+                crate::protocol::TxV1::EnterpriseInference { .. } => {
+                    meta_keys.push(Self::ai_workload_tx_meta_key(tx_hash));
+                }
+                crate::protocol::TxV1::VerifyZkProof {
+                    task_id,
+                    receipt_b64,
+                    ..
+                } => {
+                    let receipt_hash: [u8; 32] = Sha256::digest(receipt_b64.as_bytes()).into();
+                    meta_keys.push(Self::zk_verified_meta_key(&hex::encode(receipt_hash)));
+                    if !task_id.trim().is_empty() {
+                        meta_keys.push(Self::ai_workload_tx_meta_key(task_id));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(BlockUndoV1 {
+            v: 1,
+            block_id: block_id.trim().to_string(),
+            height,
+            balances: Self::undo_kvs(&self.balances, balance_keys)?,
+            meta: Self::undo_kvs(&self.meta, meta_keys)?,
+            tx_index: Self::undo_kvs(&self.tx_index, tx_index_keys)?,
+            canonical_by_height: Self::undo_kvs(
+                &self.canonical_by_height,
+                vec![Self::blocks_key_be(height).to_vec()],
+            )?,
+            chain_tip: Self::undo_kvs(
+                &self.chain_tip,
+                vec![Self::CHAIN_TIP_CANONICAL_KEY.to_vec()],
+            )?,
+            blocks: Self::undo_kvs(&self.blocks, vec![Self::blocks_key_be(height).to_vec()])?,
+            created_at_ms: ledger_now_ms(),
+        })
+    }
+
+    pub fn store_block_undo(&self, undo: &BlockUndoV1) -> Result<(), LedgerError> {
+        let bytes = serde_json::to_vec(undo).map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        self.block_undo
+            .insert(undo.block_id.trim().as_bytes(), self.encrypt_value(&bytes)?)?;
+        Ok(())
+    }
+
+    pub fn block_undo_by_id(&self, block_id: &str) -> Result<Option<BlockUndoV1>, LedgerError> {
+        let Some(v) = self.block_undo.get(block_id.trim().as_bytes())? else {
+            return Ok(None);
+        };
+        let pt = self.decrypt_value(v.as_ref())?;
+        let row = serde_json::from_slice::<BlockUndoV1>(&pt)
+            .map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        Ok(Some(row))
+    }
+
+    pub fn apply_block_undo(&self, block_id: &str) -> Result<BlockUndoV1, LedgerError> {
+        let undo = self
+            .block_undo_by_id(block_id)?
+            .ok_or_else(|| LedgerError::Invalid(format!("missing block undo: {block_id}")))?;
+        Self::restore_kvs(&self.tx_index, &undo.tx_index)?;
+        Self::restore_kvs(&self.blocks, &undo.blocks)?;
+        Self::restore_kvs(&self.canonical_by_height, &undo.canonical_by_height)?;
+        Self::restore_kvs(&self.chain_tip, &undo.chain_tip)?;
+        Self::restore_kvs(&self.meta, &undo.meta)?;
+        Self::restore_kvs(&self.balances, &undo.balances)?;
+        Ok(undo)
+    }
+
+    pub fn prune_depth_from_env() -> u64 {
+        std::env::var("TET_PRUNE_DEPTH")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(2048)
+    }
+
+    pub fn audit_max_events_from_env() -> u64 {
+        std::env::var("TET_AUDIT_MAX_EVENTS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(100_000)
+    }
+
+    pub fn prune_history_after_block(
+        &self,
+        current_height: u64,
+    ) -> Result<(usize, usize), LedgerError> {
+        let prune_depth = Self::prune_depth_from_env();
+        let undo_floor = current_height.saturating_sub(prune_depth);
+        let mut undo_removed = 0usize;
+
+        if undo_floor > 0 {
+            let mut stale_undo_keys = Vec::new();
+            for item in self.block_undo.iter() {
+                let (key, value) = item?;
+                let pt = self.decrypt_value(value.as_ref())?;
+                let Ok(row) = serde_json::from_slice::<BlockUndoV1>(&pt) else {
+                    continue;
+                };
+                if row.height < undo_floor {
+                    stale_undo_keys.push(key.to_vec());
+                }
+            }
+            for key in stale_undo_keys {
+                self.block_undo.remove(key)?;
+                undo_removed = undo_removed.saturating_add(1);
+            }
+        }
+
+        let audit_removed = self.prune_audit_events(Self::audit_max_events_from_env())?;
+        if undo_removed > 0 || audit_removed > 0 {
+            std::mem::drop(self.db.flush_async());
+        }
+        Ok((undo_removed, audit_removed))
+    }
+
+    /// Persist a lightweight block summary for explorer queries.
+    pub fn record_block_summary(
+        &self,
+        height: u64,
+        block_id: &str,
+        state_root: &str,
+        tx_count: u64,
+    ) -> Result<(), LedgerError> {
+        let row = BlockSummary {
+            height,
+            block_id: block_id.to_string(),
+            state_root: state_root.to_string(),
+            tx_count,
+            ts_ms: ledger_now_ms(),
+        };
+        let bytes = serde_json::to_vec(&row).map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        self.blocks
+            .insert(Self::blocks_key_be(height), self.encrypt_value(&bytes)?)?;
+        Ok(())
+    }
+
+    pub fn canonical_block_id_at_height(&self, height: u64) -> Result<Option<String>, LedgerError> {
+        let Some(v) = self.canonical_by_height.get(Self::blocks_key_be(height))? else {
+            return Ok(None);
+        };
+        Ok(Some(String::from_utf8_lossy(v.as_ref()).to_string()))
+    }
+
+    pub fn block_record_by_id(&self, block_id: &str) -> Result<Option<BlockRecordV1>, LedgerError> {
+        let id = block_id.trim();
+        let Some(v) = self.blocks_by_id.get(id.as_bytes())? else {
+            return Ok(None);
+        };
+        let pt = self.decrypt_value(v.as_ref())?;
+        let row = serde_json::from_slice::<BlockRecordV1>(&pt)
+            .map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        Ok(Some(row))
+    }
+
+    pub fn chain_tip(&self) -> Result<Option<ChainTipV1>, LedgerError> {
+        let Some(v) = self.chain_tip.get(Self::CHAIN_TIP_CANONICAL_KEY)? else {
+            return Ok(None);
+        };
+        let pt = self.decrypt_value(v.as_ref())?;
+        let row = serde_json::from_slice::<ChainTipV1>(&pt)
+            .map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        Ok(Some(row))
+    }
+
+    pub fn record_block_record(&self, row: &BlockRecordV1) -> Result<(), LedgerError> {
+        let block_id = row.block_id.trim().to_string();
+        if block_id.is_empty() {
+            return Err(LedgerError::Invalid("block_id required".to_string()));
+        }
+        let bytes = serde_json::to_vec(row).map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        self.blocks_by_id
+            .insert(block_id.as_bytes(), self.encrypt_value(&bytes)?)?;
+        if row.canonical {
+            self.canonical_by_height
+                .insert(Self::blocks_key_be(row.height), block_id.as_bytes())?;
+            let tip = ChainTipV1 {
+                v: 1,
+                height: row.height,
+                block_id,
+                cumulative_weight: row.cumulative_weight,
+                state_root: row.state_root.clone(),
+                updated_at_ms: ledger_now_ms(),
+            };
+            let tip_bytes =
+                serde_json::to_vec(&tip).map_err(|e| LedgerError::Invalid(e.to_string()))?;
+            self.chain_tip.insert(
+                Self::CHAIN_TIP_CANONICAL_KEY,
+                self.encrypt_value(&tip_bytes)?,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn set_block_record_canonical(
+        &self,
+        block_id: &str,
+        canonical: bool,
+    ) -> Result<(), LedgerError> {
+        let Some(mut row) = self.block_record_by_id(block_id)? else {
+            return Ok(());
+        };
+        row.canonical = canonical;
+        let bytes = serde_json::to_vec(&row).map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        self.blocks_by_id
+            .insert(row.block_id.as_bytes(), self.encrypt_value(&bytes)?)?;
+        Ok(())
+    }
+
+    pub fn set_block_height_exact(&self, height: u64) -> Result<(), LedgerError> {
+        self.meta.insert(
+            META_LEDGER_BLOCK_HEIGHT,
+            self.encrypt_value(&u64_to_bytes(height))?,
+        )?;
+        Ok(())
+    }
+
+    /// Persist a confirmed transaction for Explorer hash and block-height lookup.
+    pub fn record_tx_index(
+        &self,
+        hash: &str,
+        block_height: u64,
+        tx_index: u64,
+        tx: &crate::protocol::SignedTxEnvelopeV1,
+    ) -> Result<(), LedgerError> {
+        self.record_tx_index_with_canonical(hash, block_height, tx_index, tx, true)
+    }
+
+    pub fn record_tx_index_with_canonical(
+        &self,
+        hash: &str,
+        block_height: u64,
+        tx_index: u64,
+        tx: &crate::protocol::SignedTxEnvelopeV1,
+        canonical: bool,
+    ) -> Result<(), LedgerError> {
+        let hash = Self::normalize_tx_hash(hash);
+        let row = TxIndexRecordV1 {
+            v: 1,
+            hash: hash.clone(),
+            block_height,
+            tx_index,
+            tx_kind: Self::tx_kind(&tx.tx).to_string(),
+            workload_flag: tx.tx.workload_flag().as_u8(),
+            signer_wallet: tx.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase(),
+            canonical,
+            tx: tx.clone(),
+            indexed_at_ms: ledger_now_ms(),
+        };
+        let bytes = serde_json::to_vec(&row).map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        self.tx_index
+            .insert(hash.as_bytes(), self.encrypt_value(&bytes)?)?;
+        Ok(())
+    }
+
+    pub fn record_tx_indexes_batch(
+        &self,
+        block_height: u64,
+        tx_hashes: &[String],
+        txs: &[crate::protocol::SignedTxEnvelopeV1],
+        canonical: bool,
+    ) -> Result<(), LedgerError> {
+        if tx_hashes.len() != txs.len() {
+            return Err(LedgerError::Invalid("tx_hashes/txs length mismatch".into()));
+        }
+        let mut batch = sled::Batch::default();
+        for (idx, (hash, tx)) in tx_hashes.iter().zip(txs.iter()).enumerate() {
+            let hash = Self::normalize_tx_hash(hash);
+            let row = TxIndexRecordV1 {
+                v: 1,
+                hash: hash.clone(),
+                block_height,
+                tx_index: idx as u64,
+                tx_kind: Self::tx_kind(&tx.tx).to_string(),
+                workload_flag: tx.tx.workload_flag().as_u8(),
+                signer_wallet: tx.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase(),
+                canonical,
+                tx: tx.clone(),
+                indexed_at_ms: ledger_now_ms(),
+            };
+            let bytes =
+                serde_json::to_vec(&row).map_err(|e| LedgerError::Invalid(e.to_string()))?;
+            batch.insert(hash.as_bytes(), self.encrypt_value(&bytes)?);
+        }
+        self.tx_index.apply_batch(batch)?;
+        Ok(())
+    }
+
+    pub fn tx_by_hash(&self, hash: &str) -> Result<Option<TxIndexRecordV1>, LedgerError> {
+        let hash = Self::normalize_tx_hash(hash);
+        let Some(v) = self.tx_index.get(hash.as_bytes())? else {
+            return Ok(None);
+        };
+        let pt = self.decrypt_value(v.as_ref())?;
+        let row = serde_json::from_slice::<TxIndexRecordV1>(&pt)
+            .map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        Ok(Some(row))
+    }
+
+    pub fn txs_by_block_height(
+        &self,
+        height: u64,
+        limit: usize,
+    ) -> Result<Vec<TxIndexRecordV1>, LedgerError> {
+        let lim = limit.clamp(1, 500);
+        let mut out = Vec::new();
+        for item in self.tx_index.iter() {
+            let (_k, v) = item?;
+            let pt = self.decrypt_value(v.as_ref())?;
+            let row = serde_json::from_slice::<TxIndexRecordV1>(&pt)
+                .map_err(|e| LedgerError::Invalid(e.to_string()))?;
+            if row.block_height == height {
+                out.push(row);
+                if out.len() >= lim {
+                    break;
+                }
+            }
+        }
+        out.sort_by(|a, b| a.tx_index.cmp(&b.tx_index));
+        Ok(out)
+    }
+
+    /// Return the stored block summary for an exact height, if present.
+    pub fn block_summary_by_height(
+        &self,
+        height: u64,
+    ) -> Result<Option<BlockSummary>, LedgerError> {
+        let Some(v) = self.blocks.get(Self::blocks_key_be(height))? else {
+            return Ok(None);
+        };
+        let pt = self.decrypt_value(v.as_ref())?;
+        let row = serde_json::from_slice::<BlockSummary>(&pt)
+            .map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        Ok(Some(row))
+    }
+
+    /// Return recent blocks in descending order (newest first).
+    pub fn recent_blocks(&self, limit: usize) -> Vec<BlockSummary> {
+        let lim = limit.clamp(1, 50);
+        let mut out = Vec::new();
+        let it = self.blocks.iter().rev();
+        for res in it {
+            if out.len() >= lim {
+                break;
+            }
+            let Ok((_k, v)) = res else {
+                continue;
+            };
+            let Ok(pt) = self.decrypt_value(v.as_ref()) else {
+                continue;
+            };
+            let Ok(row) = serde_json::from_slice::<BlockSummary>(&pt) else {
+                continue;
+            };
+            out.push(row);
+        }
+        out
+    }
     fn zk_verified_meta_key(receipt_hash_hex: &str) -> Vec<u8> {
         let mut k = META_ZK_VERIFIED_PREFIX.to_vec();
         k.extend_from_slice(receipt_hash_hex.trim().as_bytes());
         k
+    }
+
+    fn ai_workload_tx_meta_key(tx_hash: &str) -> Vec<u8> {
+        let mut k = META_AI_WORKLOAD_TX_PREFIX.to_vec();
+        k.extend_from_slice(tx_hash.trim().as_bytes());
+        k
+    }
+
+    pub fn record_enterprise_inference_demand(
+        &self,
+        mut task: AiWorkloadTask,
+    ) -> Result<bool, LedgerError> {
+        task.v = 1;
+        task.kind = "enterprise_inference_demand".to_string();
+        task.tx_hash = task.tx_hash.trim().to_string();
+        task.enterprise_wallet_id = task.enterprise_wallet_id.trim().to_ascii_lowercase();
+        task.prompt_sha256_hex = task.prompt_sha256_hex.trim().to_ascii_lowercase();
+        task.model = task.model.trim().to_string();
+        task.processed = false;
+        task.processed_by = None;
+        task.processed_receipt_hash_hex = None;
+        task.processed_at_ms = None;
+        if task.tx_hash.is_empty() {
+            return Err(LedgerError::Invalid("tx_hash required".into()));
+        }
+        let tx_hash = task.tx_hash.clone();
+        let k = Self::ai_workload_tx_meta_key(&tx_hash);
+        let res: Result<bool, TransactionError<sled::Error>> = self.meta.transaction(|m| {
+            if m.get(&k)?.is_some() {
+                return Ok(false);
+            }
+            let v = serde_json::to_vec(&task).map_err(|e| {
+                ConflictableTransactionError::Abort(sled::Error::Unsupported(format!(
+                    "ai_workload_json:{e}"
+                )))
+            })?;
+            m.insert(k.clone(), self.encrypt_value(&v)?)?;
+            Ok(true)
+        });
+        let applied = res.map_err(|e| match e {
+            TransactionError::Abort(e) | TransactionError::Storage(e) => LedgerError::Sled(e),
+        })?;
+        if applied {
+            let audit = serde_json::json!({
+                "v": 1,
+                "ts_ms": ledger_now_ms(),
+                "action": "enterprise_inference_demand_record_v1",
+                "tx_hash": tx_hash,
+                "enterprise_wallet_id": task.enterprise_wallet_id,
+                "prompt_sha256_hex": task.prompt_sha256_hex,
+                "amount_micro": task.amount_micro,
+                "workload_flag": task.workload_flag,
+                "block_height": task.block_height,
+            });
+            let _ = self.audit_write(&serde_json::to_vec(&audit).unwrap_or_default());
+            std::mem::drop(self.db.flush_async());
+        }
+        Ok(applied)
+    }
+
+    pub fn ai_workload_task(&self, tx_hash: &str) -> Result<Option<AiWorkloadTask>, LedgerError> {
+        let tx_hash = tx_hash.trim();
+        if tx_hash.is_empty() {
+            return Ok(None);
+        }
+        let Some(v) = self.meta.get(Self::ai_workload_tx_meta_key(tx_hash))? else {
+            return Ok(None);
+        };
+        let pt = self.decrypt_value(v.as_ref())?;
+        serde_json::from_slice::<AiWorkloadTask>(&pt)
+            .map(Some)
+            .map_err(|e| LedgerError::Invalid(format!("ai workload json decode: {e}")))
+    }
+
+    pub fn ai_workload_is_processed(&self, tx_hash: &str) -> Result<bool, LedgerError> {
+        Ok(self
+            .ai_workload_task(tx_hash)?
+            .map(|task| task.processed)
+            .unwrap_or(false))
+    }
+
+    pub fn list_unprocessed_ai_workload_tasks(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<AiWorkloadTask>, LedgerError> {
+        let mut out = Vec::new();
+        let lim = limit.clamp(1, 100);
+        for item in self.meta.scan_prefix(META_AI_WORKLOAD_TX_PREFIX) {
+            let (_k, v) = item?;
+            let pt = self.decrypt_value(v.as_ref())?;
+            let task = serde_json::from_slice::<AiWorkloadTask>(&pt)
+                .map_err(|e| LedgerError::Invalid(format!("ai workload json decode: {e}")))?;
+            if !task.processed {
+                out.push(task);
+                if out.len() >= lim {
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn ai_workload_cockpit_counts_for_worker(
+        &self,
+        worker_wallet: &str,
+    ) -> Result<(u64, u64, u64), LedgerError> {
+        let worker = worker_wallet.trim().to_ascii_lowercase();
+        let mut processed_by_worker = 0u64;
+        let mut zk_success_by_worker = 0u64;
+        let mut unprocessed_total = 0u64;
+        for item in self.meta.scan_prefix(META_AI_WORKLOAD_TX_PREFIX) {
+            let (_k, v) = item?;
+            let pt = self.decrypt_value(v.as_ref())?;
+            let task = serde_json::from_slice::<AiWorkloadTask>(&pt)
+                .map_err(|e| LedgerError::Invalid(format!("ai workload json decode: {e}")))?;
+            if !task.processed {
+                unprocessed_total = unprocessed_total.saturating_add(1);
+                continue;
+            }
+            let processed_by = task
+                .processed_by
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase();
+            if !worker.is_empty() && processed_by == worker {
+                processed_by_worker = processed_by_worker.saturating_add(1);
+                if task
+                    .processed_receipt_hash_hex
+                    .as_deref()
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+                {
+                    zk_success_by_worker = zk_success_by_worker.saturating_add(1);
+                }
+            }
+        }
+        Ok((processed_by_worker, zk_success_by_worker, unprocessed_total))
+    }
+
+    pub fn mark_enterprise_inference_processed(
+        &self,
+        tx_hash: &str,
+        worker_wallet: &str,
+        receipt_hash_hex: &str,
+    ) -> Result<bool, LedgerError> {
+        let tx_hash = tx_hash.trim().to_string();
+        if tx_hash.is_empty() {
+            return Err(LedgerError::Invalid("tx_hash required".into()));
+        }
+        let k = Self::ai_workload_tx_meta_key(&tx_hash);
+        let worker = worker_wallet.trim().to_ascii_lowercase();
+        let receipt_hash = receipt_hash_hex.trim().to_ascii_lowercase();
+        let res: Result<bool, TransactionError<sled::Error>> = self.meta.transaction(|m| {
+            let Some(v) = m.get(&k)? else {
+                return Err(ConflictableTransactionError::Abort(
+                    sled::Error::Unsupported("ai_workload_task_missing".into()),
+                ));
+            };
+            let pt = self.decrypt_value(v.as_ref())?;
+            let mut task = serde_json::from_slice::<AiWorkloadTask>(&pt).map_err(|e| {
+                ConflictableTransactionError::Abort(sled::Error::Unsupported(format!(
+                    "ai_workload_json:{e}"
+                )))
+            })?;
+            if task.processed {
+                return Ok(false);
+            }
+            task.processed = true;
+            task.processed_by = Some(worker.clone());
+            task.processed_receipt_hash_hex = Some(receipt_hash.clone());
+            task.processed_at_ms = Some(ledger_now_ms());
+            let bytes = serde_json::to_vec(&task).map_err(|e| {
+                ConflictableTransactionError::Abort(sled::Error::Unsupported(format!(
+                    "ai_workload_json:{e}"
+                )))
+            })?;
+            m.insert(k.clone(), self.encrypt_value(&bytes)?)?;
+            Ok(true)
+        });
+        let applied = res.map_err(|e| match e {
+            TransactionError::Abort(e) | TransactionError::Storage(e) => LedgerError::Sled(e),
+        })?;
+        if applied {
+            let audit = serde_json::json!({
+                "v": 1,
+                "ts_ms": ledger_now_ms(),
+                "action": "enterprise_inference_processed_v1",
+                "tx_hash": tx_hash,
+                "processed_by": worker,
+                "receipt_hash_hex": receipt_hash,
+            });
+            let _ = self.audit_write(&serde_json::to_vec(&audit).unwrap_or_default());
+            std::mem::drop(self.db.flush_async());
+        }
+        Ok(applied)
     }
 
     /// Record a verified zk receipt in the ledger (idempotent).
@@ -465,14 +1308,440 @@ impl Ledger {
             let amt = u64::from_le_bytes(arr);
             rows.push((k.to_vec(), amt));
         }
-        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        Self::state_root_from_rows(rows)
+    }
 
+    fn state_root_from_rows(mut rows: Vec<(Vec<u8>, u64)>) -> String {
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
         let mut h = Sha256::new();
         for (k, amt) in rows {
             h.update(&k);
             h.update(u64_to_bytes(amt));
         }
         format!("0x{}", hex::encode(h.finalize()))
+    }
+
+    /// Preview the post-block balance root without mutating sled.
+    ///
+    /// This lets P2P receivers reject a bad `state_root` before applying the remote block.
+    pub fn compute_state_root_after_remote_txs(
+        &self,
+        txs: &[crate::protocol::SignedTxEnvelopeV1],
+    ) -> Result<String, LedgerError> {
+        self.compute_state_root_after_remote_block(txs, "", 0)
+    }
+
+    pub fn compute_state_root_after_remote_block(
+        &self,
+        txs: &[crate::protocol::SignedTxEnvelopeV1],
+        producer_id: &str,
+        reward_micro: u64,
+    ) -> Result<String, LedgerError> {
+        let mut balances = BTreeMap::<Vec<u8>, u64>::new();
+        for it in self.balances.iter() {
+            let (k, v) = it?;
+            let pt = self.decrypt_value(v.as_ref())?;
+            if pt.len() != 8 {
+                continue;
+            }
+            let arr = <[u8; 8]>::try_from(pt.as_slice())
+                .map_err(|_| LedgerError::Invalid("invalid balance encoding".into()))?;
+            balances.insert(k.to_vec(), u64::from_le_bytes(arr));
+        }
+
+        for env in txs {
+            match &env.tx {
+                crate::protocol::TxV1::Transfer {
+                    from_wallet,
+                    to_wallet,
+                    amount_micro,
+                    fee_bps,
+                } => {
+                    if from_wallet.trim().is_empty() || to_wallet.trim().is_empty() {
+                        return Err(LedgerError::Invalid("from/to required".into()));
+                    }
+                    if *amount_micro == 0 || *amount_micro > MAX_SUPPLY_MICRO {
+                        return Err(LedgerError::Invalid("amount exceeds hard cap".into()));
+                    }
+
+                    let from = from_wallet.trim().to_ascii_lowercase();
+                    let to = to_wallet.trim().to_ascii_lowercase();
+                    let from_k = from.as_bytes().to_vec();
+                    let to_k = to.as_bytes().to_vec();
+                    let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
+                    let burn_wallet = self.ai_burn_wallet();
+                    let burn_k = burn_wallet.as_bytes().to_vec();
+
+                    let fb = balances.get(&from_k).copied().unwrap_or(0);
+                    let locked_sum = self.locked_balance_micro(&from, ledger_now_ms())?;
+                    if fb.saturating_sub(locked_sum) < *amount_micro {
+                        return Err(LedgerError::InsufficientFunds);
+                    }
+
+                    let fee_micro = (*amount_micro).saturating_mul(*fee_bps) / 10_000;
+                    let net_micro = (*amount_micro).saturating_sub(fee_micro);
+                    let fee_pool_half = fee_micro / 2;
+                    let fee_burn_half = fee_micro.saturating_sub(fee_pool_half);
+
+                    balances.insert(from_k, fb - *amount_micro);
+                    let tb = balances.get(&to_k).copied().unwrap_or(0);
+                    balances.insert(to_k, tb.saturating_add(net_micro));
+
+                    if fee_micro > 0 {
+                        let pool_cur = balances.get(&pool_k).copied().unwrap_or(0);
+                        balances.insert(pool_k, pool_cur.saturating_add(fee_pool_half));
+                        let burn_cur = balances.get(&burn_k).copied().unwrap_or(0);
+                        balances.insert(burn_k, burn_cur.saturating_add(fee_burn_half));
+                    }
+                }
+                crate::protocol::TxV1::VerifyZkProof { .. } => {}
+                crate::protocol::TxV1::EnterpriseInference { .. } => {}
+                _ => {
+                    return Err(LedgerError::Invalid(
+                        "unsupported tx in remote block".into(),
+                    ));
+                }
+            }
+        }
+
+        Self::apply_block_reward_to_balance_map(&mut balances, producer_id, reward_micro)?;
+
+        Ok(Self::state_root_from_rows(balances.into_iter().collect()))
+    }
+
+    fn meta_u64_or_zero(&self, key: &[u8]) -> Result<u64, LedgerError> {
+        Ok(self
+            .meta
+            .get(key)?
+            .as_deref()
+            .map(|v| self.decrypt_value(v))
+            .transpose()?
+            .as_deref()
+            .map(bytes_to_u64)
+            .unwrap_or(0))
+    }
+
+    pub fn apply_consensus_block_batch(
+        &self,
+        block_height: u64,
+        txs: &[crate::protocol::SignedTxEnvelopeV1],
+        tx_hashes: &[String],
+        producer_id: &str,
+        reward_micro: u64,
+    ) -> Result<String, LedgerError> {
+        if txs.len() != tx_hashes.len() {
+            return Err(LedgerError::Invalid("txs/tx_hashes length mismatch".into()));
+        }
+        let mut balances = BTreeMap::<Vec<u8>, u64>::new();
+        for it in self.balances.iter() {
+            let (k, v) = it?;
+            let pt = self.decrypt_value(v.as_ref())?;
+            if pt.len() != 8 {
+                continue;
+            }
+            let arr = <[u8; 8]>::try_from(pt.as_slice())
+                .map_err(|_| LedgerError::Invalid("invalid balance encoding".into()))?;
+            balances.insert(k.to_vec(), u64::from_le_bytes(arr));
+        }
+
+        let mut total_supply = self.meta_u64_or_zero(META_TOTAL_SUPPLY)?;
+        let mut total_burned = self.meta_u64_or_zero(META_TOTAL_BURNED)?;
+        let mut fee_total = self.meta_u64_or_zero(META_FEE_TOTAL)?;
+        let mut dirty_balances = BTreeSet::<Vec<u8>>::new();
+        let mut meta_batch = sled::Batch::default();
+
+        for (env, tx_hash) in txs.iter().zip(tx_hashes.iter()) {
+            match &env.tx {
+                crate::protocol::TxV1::Transfer {
+                    from_wallet,
+                    to_wallet,
+                    amount_micro,
+                    fee_bps,
+                } => {
+                    if from_wallet.trim().is_empty() || to_wallet.trim().is_empty() {
+                        return Err(LedgerError::Invalid("from/to required".into()));
+                    }
+                    if *amount_micro == 0 || *amount_micro > MAX_SUPPLY_MICRO {
+                        return Err(LedgerError::Invalid("amount exceeds hard cap".into()));
+                    }
+                    let applied_k = Self::remote_tx_applied_meta_key(tx_hash);
+                    if self.meta.get(&applied_k)?.is_some() {
+                        continue;
+                    }
+                    let from = from_wallet.trim().to_ascii_lowercase();
+                    let to = to_wallet.trim().to_ascii_lowercase();
+                    let from_k = from.as_bytes().to_vec();
+                    let to_k = to.as_bytes().to_vec();
+                    let locked_sum = self.locked_balance_micro(&from, ledger_now_ms())?;
+                    let fb = balances.get(&from_k).copied().unwrap_or(0);
+                    let spendable = fb.saturating_sub(locked_sum);
+                    if spendable < *amount_micro {
+                        return Err(LedgerError::InsufficientFunds);
+                    }
+                    let fee_micro = amount_micro.saturating_mul(*fee_bps) / 10_000;
+                    let net_micro = amount_micro.saturating_sub(fee_micro);
+                    let fee_pool_half = fee_micro / 2;
+                    let fee_burn_half = fee_micro.saturating_sub(fee_pool_half);
+
+                    balances.insert(from_k.clone(), fb - amount_micro);
+                    let tb = balances.get(&to_k).copied().unwrap_or(0);
+                    balances.insert(to_k.clone(), tb.saturating_add(net_micro));
+                    dirty_balances.insert(from_k);
+                    dirty_balances.insert(to_k);
+
+                    if fee_micro > 0 {
+                        let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
+                        let burn_wallet = self.ai_burn_wallet();
+                        let burn_k = burn_wallet.as_bytes().to_vec();
+                        let pool_cur = balances.get(&pool_k).copied().unwrap_or(0);
+                        balances.insert(pool_k.clone(), pool_cur.saturating_add(fee_pool_half));
+                        let burn_cur = balances.get(&burn_k).copied().unwrap_or(0);
+                        balances.insert(burn_k.clone(), burn_cur.saturating_add(fee_burn_half));
+                        dirty_balances.insert(pool_k);
+                        dirty_balances.insert(burn_k);
+                        total_supply = total_supply.saturating_sub(fee_burn_half);
+                        total_burned = total_burned.saturating_add(fee_burn_half);
+                        fee_total = fee_total.saturating_add(fee_micro);
+                    }
+                    meta_batch.insert(applied_k, self.encrypt_value(b"1")?);
+                }
+                crate::protocol::TxV1::VerifyZkProof {
+                    task_id,
+                    image_id,
+                    journal_b64,
+                    receipt_b64,
+                } => {
+                    if *image_id != methods::NEXUS_GUEST_ID {
+                        return Err(LedgerError::Invalid("image_id mismatch".into()));
+                    }
+                    let receipt_hash: [u8; 32] = Sha256::digest(receipt_b64.as_bytes()).into();
+                    let journal_hash: [u8; 32] = Sha256::digest(journal_b64.as_bytes()).into();
+                    let receipt_hash_hex = hex::encode(receipt_hash);
+                    let zk_key = Self::zk_verified_meta_key(&receipt_hash_hex);
+                    if self.meta.get(&zk_key)?.is_none() {
+                        let v = serde_json::to_vec(&serde_json::json!({
+                            "v": 1,
+                            "kind": "zk_verified",
+                            "image_id": image_id,
+                            "receipt_hash_hex": receipt_hash_hex,
+                            "journal_hash_hex": hex::encode(journal_hash),
+                            "ts_ms": ledger_now_ms(),
+                        }))
+                        .map_err(|e| LedgerError::Invalid(format!("zk_verified_json:{e}")))?;
+                        meta_batch.insert(zk_key, self.encrypt_value(&v)?);
+                    }
+                    if !task_id.trim().is_empty() {
+                        let task_key = Self::ai_workload_tx_meta_key(task_id);
+                        let Some(v) = self.meta.get(&task_key)? else {
+                            return Err(LedgerError::Invalid("ai_workload_task_missing".into()));
+                        };
+                        let pt = self.decrypt_value(v.as_ref())?;
+                        let mut task =
+                            serde_json::from_slice::<AiWorkloadTask>(&pt).map_err(|e| {
+                                LedgerError::Invalid(format!("ai workload json decode: {e}"))
+                            })?;
+                        if !task.processed {
+                            task.processed = true;
+                            task.processed_by =
+                                Some(env.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase());
+                            task.processed_receipt_hash_hex = Some(receipt_hash_hex);
+                            task.processed_at_ms = Some(ledger_now_ms());
+                            let bytes = serde_json::to_vec(&task).map_err(|e| {
+                                LedgerError::Invalid(format!("ai_workload_json:{e}"))
+                            })?;
+                            meta_batch.insert(task_key, self.encrypt_value(&bytes)?);
+                        }
+                    }
+                }
+                crate::protocol::TxV1::EnterpriseInference {
+                    enterprise_wallet_id,
+                    prompt,
+                    model,
+                    amount_micro,
+                    prompt_sha256_hex,
+                    workload_flag,
+                    ..
+                } => {
+                    let task_key = Self::ai_workload_tx_meta_key(tx_hash);
+                    if self.meta.get(&task_key)?.is_none() {
+                        let task = AiWorkloadTask {
+                            v: 1,
+                            kind: "enterprise_inference_demand".to_string(),
+                            tx_hash: tx_hash.trim().to_string(),
+                            enterprise_wallet_id: enterprise_wallet_id.trim().to_ascii_lowercase(),
+                            prompt: prompt.clone(),
+                            prompt_sha256_hex: prompt_sha256_hex.trim().to_ascii_lowercase(),
+                            model: model.trim().to_string(),
+                            amount_micro: *amount_micro,
+                            workload_flag: *workload_flag,
+                            block_height,
+                            processed: false,
+                            processed_by: None,
+                            processed_receipt_hash_hex: None,
+                            processed_at_ms: None,
+                        };
+                        let bytes = serde_json::to_vec(&task)
+                            .map_err(|e| LedgerError::Invalid(format!("ai_workload_json:{e}")))?;
+                        meta_batch.insert(task_key, self.encrypt_value(&bytes)?);
+                    }
+                }
+                _ => {
+                    return Err(LedgerError::Invalid(
+                        "unsupported tx in consensus block".into(),
+                    ));
+                }
+            }
+        }
+
+        Self::apply_block_reward_to_balance_map(&mut balances, producer_id, reward_micro)?;
+        if reward_micro > 0 {
+            dirty_balances.insert(WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec());
+            dirty_balances.insert(producer_id.trim().to_ascii_lowercase().as_bytes().to_vec());
+        }
+        meta_batch.insert(
+            META_TOTAL_SUPPLY,
+            self.encrypt_value(&u64_to_bytes(total_supply))?,
+        );
+        meta_batch.insert(
+            META_TOTAL_BURNED,
+            self.encrypt_value(&u64_to_bytes(total_burned))?,
+        );
+        meta_batch.insert(
+            META_FEE_TOTAL,
+            self.encrypt_value(&u64_to_bytes(fee_total))?,
+        );
+        meta_batch.insert(
+            META_LEDGER_BLOCK_HEIGHT,
+            self.encrypt_value(&u64_to_bytes(block_height))?,
+        );
+
+        let state_root =
+            Self::state_root_from_rows(balances.iter().map(|(k, v)| (k.clone(), *v)).collect());
+        let mut balance_batch = sled::Batch::default();
+        for key in dirty_balances {
+            let amount = balances.get(&key).copied().unwrap_or(0);
+            balance_batch.insert(key, self.encrypt_value(&u64_to_bytes(amount))?);
+        }
+        self.balances.apply_batch(balance_batch)?;
+        self.meta.apply_batch(meta_batch)?;
+        std::mem::drop(self.db.flush_async());
+        self.schedule_snapshot_after_block(block_height);
+        Ok(state_root)
+    }
+
+    fn apply_block_reward_to_balance_map(
+        balances: &mut BTreeMap<Vec<u8>, u64>,
+        producer_id: &str,
+        reward_micro: u64,
+    ) -> Result<(), LedgerError> {
+        if reward_micro == 0 {
+            return Ok(());
+        }
+        let producer = producer_id.trim().to_ascii_lowercase();
+        if producer.is_empty() {
+            return Err(LedgerError::Invalid("producer_id required".into()));
+        }
+        if Self::is_reserved_reward_wallet(&producer) {
+            return Err(LedgerError::Invalid(
+                "reserved wallet cannot receive block reward".into(),
+            ));
+        }
+        let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
+        let producer_k = producer.as_bytes().to_vec();
+        let pool_cur = balances.get(&pool_k).copied().unwrap_or(0);
+        if pool_cur < reward_micro {
+            return Err(LedgerError::InsufficientFunds);
+        }
+        let producer_cur = balances.get(&producer_k).copied().unwrap_or(0);
+        balances.insert(pool_k, pool_cur - reward_micro);
+        balances.insert(producer_k, producer_cur.saturating_add(reward_micro));
+        Ok(())
+    }
+
+    fn is_reserved_reward_wallet(wallet: &str) -> bool {
+        wallet == WALLET_SYSTEM_WORKER_POOL
+            || wallet == WALLET_DEX_TREASURY
+            || wallet == WALLET_PROTOCOL_RESERVE
+            || wallet == WALLET_ECOSYSTEM
+    }
+
+    pub fn apply_block_reward(
+        &self,
+        producer_id: &str,
+        reward_micro: u64,
+        block_height: u64,
+    ) -> Result<bool, LedgerError> {
+        if reward_micro == 0 {
+            return Ok(false);
+        }
+        let producer = producer_id.trim().to_ascii_lowercase();
+        if producer.is_empty() {
+            return Err(LedgerError::Invalid("producer_id required".into()));
+        }
+        if Self::is_reserved_reward_wallet(&producer) {
+            return Err(LedgerError::Invalid(
+                "reserved wallet cannot receive block reward".into(),
+            ));
+        }
+
+        let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
+        let producer_k = producer.as_bytes().to_vec();
+        let res: Result<(), TransactionError<sled::Error>> = self.balances.transaction(|b| {
+            let pool_cur = b
+                .get(&pool_k)?
+                .as_deref()
+                .map(|v| self.decrypt_value(v))
+                .transpose()?
+                .as_deref()
+                .map(bytes_to_u64)
+                .unwrap_or(0);
+            if pool_cur < reward_micro {
+                return Err(ConflictableTransactionError::Abort(
+                    sled::Error::Unsupported("block_reward_pool_insufficient".into()),
+                ));
+            }
+            let producer_cur = b
+                .get(&producer_k)?
+                .as_deref()
+                .map(|v| self.decrypt_value(v))
+                .transpose()?
+                .as_deref()
+                .map(bytes_to_u64)
+                .unwrap_or(0);
+            b.insert(
+                pool_k.clone(),
+                self.encrypt_value(&u64_to_bytes(pool_cur - reward_micro))?,
+            )?;
+            b.insert(
+                producer_k.clone(),
+                self.encrypt_value(&u64_to_bytes(producer_cur.saturating_add(reward_micro)))?,
+            )?;
+            Ok(())
+        });
+
+        res.map_err(|e| match e {
+            TransactionError::Abort(e) | TransactionError::Storage(e) => {
+                if e.to_string().contains("block_reward_pool_insufficient") {
+                    LedgerError::InsufficientFunds
+                } else {
+                    LedgerError::Sled(e)
+                }
+            }
+        })?;
+
+        let audit = serde_json::json!({
+            "v": 1,
+            "ts_ms": ledger_now_ms(),
+            "action": "block_reward_v1",
+            "block_height": block_height,
+            "producer_id": producer,
+            "from_wallet": WALLET_SYSTEM_WORKER_POOL,
+            "reward_micro": reward_micro,
+        });
+        let _ = self.audit_write(&serde_json::to_vec(&audit).unwrap_or_default());
+        self.persist_snapshot_best_effort();
+        std::mem::drop(self.db.flush_async());
+        Ok(true)
     }
     /// Read current mined block height (0 if unset).
     pub fn block_height(&self) -> Result<u64, LedgerError> {
@@ -509,6 +1778,31 @@ impl Ledger {
             TransactionError::Abort(e) | TransactionError::Storage(e) => LedgerError::Sled(e),
         })
     }
+
+    /// Persist a remote block height if it advances the local chain.
+    pub fn set_block_height_if_newer(&self, height: u64) -> Result<bool, LedgerError> {
+        let res: Result<bool, TransactionError<sled::Error>> = self.meta.transaction(|m| {
+            let cur = m
+                .get(META_LEDGER_BLOCK_HEIGHT)?
+                .as_deref()
+                .map(|v| self.decrypt_value(v))
+                .transpose()?
+                .as_deref()
+                .map(bytes_to_u64)
+                .unwrap_or(0);
+            if height <= cur {
+                return Ok(false);
+            }
+            m.insert(
+                META_LEDGER_BLOCK_HEIGHT,
+                self.encrypt_value(&u64_to_bytes(height))?,
+            )?;
+            Ok(true)
+        });
+        res.map_err(|e| match e {
+            TransactionError::Abort(e) | TransactionError::Storage(e) => LedgerError::Sled(e),
+        })
+    }
     fn remote_tx_applied_meta_key(tx_hash: &str) -> Vec<u8> {
         let mut k = META_REMOTE_TX_APPLIED_PREFIX.to_vec();
         k.extend_from_slice(tx_hash.trim().as_bytes());
@@ -526,6 +1820,11 @@ impl Ledger {
             crate::models::NetworkEvent::BlockMined {
                 block_height: _,
                 block_id: _,
+                parent_block_id: _,
+                producer_id: _,
+                base_reward_micro: _,
+                compute_reward_micro: _,
+                total_reward_micro: _,
                 state_root: _,
                 txs,
             } => {
@@ -574,7 +1873,7 @@ impl Ledger {
         }
     }
 
-    fn apply_remote_transfer(
+    pub(crate) fn apply_remote_transfer(
         &self,
         tx_hash: &str,
         from: &str,
@@ -1563,6 +2862,242 @@ impl Ledger {
         }
     }
 
+    fn zkcourt_bond_key(inference_id: &str, challenger: &str) -> Vec<u8> {
+        format!(
+            "{}:{}",
+            inference_id.trim(),
+            challenger.trim().to_ascii_lowercase()
+        )
+        .into_bytes()
+    }
+
+    pub fn zkcourt_challenger_bond_micro() -> u64 {
+        std::env::var("TET_ZK_COURT_CHALLENGER_BOND_MICRO")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(100 * STEVEMON)
+    }
+
+    pub fn zkcourt_put_dispute_json(
+        &self,
+        inference_id: &str,
+        json: &[u8],
+    ) -> Result<(), LedgerError> {
+        self.zkcourt_disputes
+            .insert(inference_id.trim().as_bytes(), self.encrypt_value(json)?)?;
+        std::mem::drop(self.db.flush_async());
+        Ok(())
+    }
+
+    pub fn zkcourt_get_dispute_json(
+        &self,
+        inference_id: &str,
+    ) -> Result<Option<Vec<u8>>, LedgerError> {
+        let Some(v) = self.zkcourt_disputes.get(inference_id.trim().as_bytes())? else {
+            return Ok(None);
+        };
+        Ok(Some(self.decrypt_value(v.as_ref())?))
+    }
+
+    pub fn zkcourt_list_dispute_json(&self) -> Result<Vec<Vec<u8>>, LedgerError> {
+        let mut out = Vec::new();
+        for item in self.zkcourt_disputes.iter() {
+            let (_k, v) = item?;
+            out.push(self.decrypt_value(v.as_ref())?);
+        }
+        Ok(out)
+    }
+
+    pub fn zkcourt_put_artifact_json(
+        &self,
+        inference_id: &str,
+        json: &[u8],
+    ) -> Result<(), LedgerError> {
+        self.zkcourt_artifacts
+            .insert(inference_id.trim().as_bytes(), self.encrypt_value(json)?)?;
+        std::mem::drop(self.db.flush_async());
+        Ok(())
+    }
+
+    pub fn zkcourt_get_artifact_json(
+        &self,
+        inference_id: &str,
+    ) -> Result<Option<Vec<u8>>, LedgerError> {
+        let Some(v) = self.zkcourt_artifacts.get(inference_id.trim().as_bytes())? else {
+            return Ok(None);
+        };
+        Ok(Some(self.decrypt_value(v.as_ref())?))
+    }
+
+    pub fn zkcourt_lock_challenger_bond(
+        &self,
+        inference_id: &str,
+        challenger: &str,
+    ) -> Result<u64, LedgerError> {
+        let bond = Self::zkcourt_challenger_bond_micro();
+        let c = challenger.trim().to_ascii_lowercase();
+        if c.is_empty() {
+            return Err(LedgerError::Invalid("challenger wallet required".into()));
+        }
+        let c_k = c.as_bytes().to_vec();
+        let bond_k = Self::zkcourt_bond_key(inference_id, &c);
+        let res: Result<(), TransactionError<sled::Error>> = (&self.balances, &self.zkcourt_bonds)
+            .transaction(|(b, zb)| {
+                if zb.get(&bond_k)?.is_some() {
+                    return Err(ConflictableTransactionError::Abort(
+                        sled::Error::Unsupported("bond_already_locked".into()),
+                    ));
+                }
+                let bal = b
+                    .get(&c_k)?
+                    .as_deref()
+                    .map(|v| self.decrypt_value(v))
+                    .transpose()?
+                    .as_deref()
+                    .map(bytes_to_u64)
+                    .unwrap_or(0);
+                if bal < bond {
+                    return Err(ConflictableTransactionError::Abort(
+                        sled::Error::Unsupported("insufficient_challenger_bond".into()),
+                    ));
+                }
+                b.insert(
+                    c_k.clone(),
+                    self.encrypt_value(&u64_to_bytes(bal.saturating_sub(bond)))?,
+                )?;
+                zb.insert(bond_k.clone(), self.encrypt_value(&u64_to_bytes(bond))?)?;
+                Ok(())
+            });
+        res.map_err(|e| match e {
+            TransactionError::Abort(e) | TransactionError::Storage(e) => {
+                if e.to_string().contains("insufficient_challenger_bond") {
+                    LedgerError::InsufficientFunds
+                } else if e.to_string().contains("bond_already_locked") {
+                    LedgerError::Invalid("challenger bond already locked".into())
+                } else {
+                    LedgerError::Sled(e)
+                }
+            }
+        })?;
+        Ok(bond)
+    }
+
+    pub fn zkcourt_settle_challenger_bond(
+        &self,
+        inference_id: &str,
+        challenger: &str,
+        valid_challenge: bool,
+    ) -> Result<u64, LedgerError> {
+        let c = challenger.trim().to_ascii_lowercase();
+        let c_k = c.as_bytes().to_vec();
+        let eco_k = WALLET_ECOSYSTEM.as_bytes().to_vec();
+        let bond_k = Self::zkcourt_bond_key(inference_id, &c);
+        let res: Result<u64, TransactionError<sled::Error>> = (&self.balances, &self.zkcourt_bonds)
+            .transaction(|(b, zb)| {
+                let cur = zb
+                    .get(&bond_k)?
+                    .as_deref()
+                    .map(|v| self.decrypt_value(v))
+                    .transpose()?
+                    .as_deref()
+                    .map(bytes_to_u64)
+                    .unwrap_or(0);
+                if cur == 0 {
+                    return Ok(0);
+                }
+                zb.remove(bond_k.clone())?;
+                let target_k = if valid_challenge { &c_k } else { &eco_k };
+                let target_bal = b
+                    .get(target_k)?
+                    .as_deref()
+                    .map(|v| self.decrypt_value(v))
+                    .transpose()?
+                    .as_deref()
+                    .map(bytes_to_u64)
+                    .unwrap_or(0);
+                b.insert(
+                    target_k.clone(),
+                    self.encrypt_value(&u64_to_bytes(target_bal.saturating_add(cur)))?,
+                )?;
+                Ok(cur)
+            });
+        let settled = res.map_err(|e| match e {
+            TransactionError::Abort(e) | TransactionError::Storage(e) => LedgerError::Sled(e),
+        })?;
+        if settled > 0 {
+            let audit = serde_json::json!({
+                "v": 1,
+                "action": if valid_challenge { "zk_court_challenger_bond_refund_v1" } else { "zk_court_challenger_bond_slash_v1" },
+                "inference_id": inference_id.trim(),
+                "challenger": c,
+                "amount_micro": settled,
+                "recipient": if valid_challenge { challenger.trim() } else { WALLET_ECOSYSTEM },
+            });
+            let _ = self.audit_write(&serde_json::to_vec(&audit).unwrap_or_default());
+        }
+        Ok(settled)
+    }
+
+    /// ZK fraud verdict: confiscate the worker's entire Sybil bond and move it to ecosystem treasury.
+    pub fn slash_worker_bond_to_ecosystem_all(&self, wallet: &str) -> Result<u64, LedgerError> {
+        let w = wallet.trim().to_ascii_lowercase();
+        if w.is_empty() {
+            return Err(LedgerError::Invalid("wallet required".into()));
+        }
+        let w_k = w.as_bytes().to_vec();
+        let eco_k = WALLET_ECOSYSTEM.as_bytes().to_vec();
+        let res: Result<u64, TransactionError<sled::Error>> = (&self.worker_stakes, &self.balances)
+            .transaction(|(ws, b)| {
+                let cur_bond = ws
+                    .get(&w_k)?
+                    .as_deref()
+                    .map(|v| self.decrypt_value(v))
+                    .transpose()?
+                    .as_deref()
+                    .map(bytes_to_u64)
+                    .unwrap_or(0);
+                if cur_bond == 0 {
+                    return Err(ConflictableTransactionError::Abort(
+                        sled::Error::Unsupported("zero_worker_bond".into()),
+                    ));
+                }
+                ws.remove(w_k.clone())?;
+                let eco_bal = b
+                    .get(&eco_k)?
+                    .as_deref()
+                    .map(|v| self.decrypt_value(v))
+                    .transpose()?
+                    .as_deref()
+                    .map(bytes_to_u64)
+                    .unwrap_or(0);
+                b.insert(
+                    eco_k.clone(),
+                    self.encrypt_value(&u64_to_bytes(eco_bal.saturating_add(cur_bond)))?,
+                )?;
+                Ok(cur_bond)
+            });
+        let slashed = res.map_err(|e| match e {
+            TransactionError::Abort(e) | TransactionError::Storage(e) => {
+                if e.to_string().contains("zero_worker_bond") {
+                    LedgerError::Invalid("no worker bond to slash".into())
+                } else {
+                    LedgerError::Sled(e)
+                }
+            }
+        })?;
+        let audit = serde_json::json!({
+            "v": 1,
+            "action": "zk_proof_worker_bond_slash_to_ecosystem_v1",
+            "wallet": w,
+            "ecosystem_wallet": WALLET_ECOSYSTEM,
+            "slashed_micro": slashed,
+        });
+        let _ = self.audit_write(&serde_json::to_vec(&audit).unwrap_or_default());
+        self.persist_snapshot_best_effort();
+        Ok(slashed)
+    }
+
     /// Slash: remove micro-units from staked balance and burn them from total supply.
     pub fn slash_stake_micro(
         &self,
@@ -1843,6 +3378,15 @@ impl Ledger {
             faucet_claims: db.open_tree("faucet_claims_v1")?,
             faucet_ip_rl: db.open_tree("faucet_ip_rl_v1")?,
             worker_stakes: db.open_tree("worker_stakes_v1")?,
+            blocks: db.open_tree("blocks_v1")?,
+            blocks_by_id: db.open_tree("blocks_by_id_v1")?,
+            canonical_by_height: db.open_tree("canonical_by_height_v1")?,
+            chain_tip: db.open_tree("chain_tip_v1")?,
+            block_undo: db.open_tree("block_undo_v1")?,
+            tx_index: db.open_tree("tx_index_v1")?,
+            zkcourt_disputes: db.open_tree("zkcourt_disputes_v1")?,
+            zkcourt_artifacts: db.open_tree("zkcourt_artifacts_v1")?,
+            zkcourt_bonds: db.open_tree("zkcourt_bonds_v1")?,
             db,
             enc_key,
             snapshot_dir,
@@ -2085,6 +3629,45 @@ impl Ledger {
         Ok(next)
     }
 
+    fn prune_audit_events(&self, max_events: u64) -> Result<usize, LedgerError> {
+        if max_events == 0 {
+            return Ok(0);
+        }
+        let newest_seq = self
+            .meta
+            .get(META_AUDIT_SEQ)?
+            .as_deref()
+            .map(|v| self.decrypt_value(v))
+            .transpose()?
+            .as_deref()
+            .map(bytes_to_u64)
+            .unwrap_or(0);
+        let keep_after = newest_seq.saturating_sub(max_events);
+        if keep_after == 0 {
+            return Ok(0);
+        }
+
+        let mut stale = Vec::new();
+        for item in self.audit_seq.iter() {
+            let (seq_key, hash_bytes) = item?;
+            let seq = bytes_to_u64(seq_key.as_ref());
+            if seq > keep_after {
+                break;
+            }
+            stale.push((seq_key.to_vec(), hash_bytes.to_vec()));
+        }
+
+        let mut removed = 0usize;
+        for (seq_key, hash_bytes) in stale {
+            self.audit_seq.remove(seq_key)?;
+            if !hash_bytes.is_empty() {
+                self.audit.remove(hash_bytes)?;
+            }
+            removed = removed.saturating_add(1);
+        }
+        Ok(removed)
+    }
+
     fn snapshot_path(&self) -> (std::path::PathBuf, std::path::PathBuf) {
         let json = std::env::var("TET_LEDGER_JSON_PATH")
             .ok()
@@ -2259,6 +3842,21 @@ impl Ledger {
         {
             crate::replication::emit_signed_state_update(&bytes);
         }
+    }
+
+    fn schedule_snapshot_after_block(&self, block_height: u64) {
+        let every = std::env::var("TET_SNAPSHOT_EVERY_BLOCKS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(100)
+            .max(1);
+        if block_height == 0 || !block_height.is_multiple_of(every) {
+            return;
+        }
+        let ledger = self.clone();
+        std::thread::spawn(move || {
+            ledger.persist_snapshot_best_effort();
+        });
     }
 
     /// Flush DB and write an external JSON snapshot (best effort).
@@ -2457,6 +4055,23 @@ impl Ledger {
         if founder.is_empty() {
             return Err(LedgerError::Invalid("founder_wallet_id required".into()));
         }
+        if mainnet_env_enabled() {
+            let required = std::env::var("TET_GENESIS_FOUNDER_WALLET_ID")
+                .ok()
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "CRITICAL: TET_MAINNET=1 requires TET_GENESIS_FOUNDER_WALLET_ID before genesis"
+                    )
+                });
+            if founder.trim().to_ascii_lowercase() != required {
+                panic!(
+                    "CRITICAL: mainnet genesis founder mismatch: requested={} required={required}",
+                    founder.trim().to_ascii_lowercase()
+                );
+            }
+        }
 
         if self.total_supply_micro()? > 0 {
             return Err(LedgerError::GenesisAlreadyApplied);
@@ -2472,6 +4087,7 @@ impl Ledger {
         let reserve_key = WALLET_PROTOCOL_RESERVE.as_bytes().to_vec();
         let now_ms = ledger_now_ms();
         let unlock_at_ms = now_ms.saturating_add(founder_genesis_cliff_ms());
+        let genesis_hash = deterministic_genesis_hash(&founder);
 
         let res: Result<GenesisAllocationSummary, TransactionError<sled::Error>> =
             (&self.meta, &self.balances).transaction(|(m, b)| {
@@ -2530,6 +4146,10 @@ impl Ledger {
                     self.encrypt_value(&u64_to_bytes(GENESIS_TOTAL_MINT_MICRO))?,
                 )?;
                 m.insert(META_FOUNDER_WALLET, self.encrypt_value(founder.as_bytes())?)?;
+                m.insert(
+                    META_GENESIS_HASH,
+                    self.encrypt_value(genesis_hash.as_bytes())?,
+                )?;
                 // Founder vesting: lock the genesis allocation for exactly 365 days.
                 m.insert(
                     META_FOUNDER_GENESIS_UNLOCK_AT_MS,
@@ -2565,6 +4185,8 @@ impl Ledger {
             "v": 1,
             "ts_ms": ledger_now_ms(),
             "action": "genesis_allocation",
+            "genesis_hash": deterministic_genesis_hash(&summary.founder_wallet_id),
+            "genesis_tokenomics": "fixed_supply_25_founder_50_worker_pool_25_ecosystem",
             "founder_wallet_id": summary.founder_wallet_id,
             "founder_allocation_micro": summary.founder_allocation_micro,
             "worker_pool_wallet_id": WALLET_WORKER_POOL,
@@ -2610,6 +4232,13 @@ impl Ledger {
             pool_bal, GENESIS_WORKER_POOL_SHARE_MICRO,
             "FATAL: system-locked pool balance mismatch after genesis"
         );
+        let ecosystem_bal = self.balance_micro(WALLET_ECOSYSTEM).unwrap_or_else(|e| {
+            panic!("FATAL: could not read ecosystem balance after genesis: {e}")
+        });
+        assert_eq!(
+            ecosystem_bal, GENESIS_ECOSYSTEM_SHARE_MICRO,
+            "FATAL: ecosystem treasury balance mismatch after genesis"
+        );
 
         let snap_bytes = self
             .build_snapshot_bytes()
@@ -2647,6 +4276,18 @@ impl Ledger {
             .as_deref()
             .map(bytes_to_u64)
             .unwrap_or(0))
+    }
+
+    pub fn genesis_hash(&self) -> Result<String, LedgerError> {
+        Ok(self
+            .meta
+            .get(META_GENESIS_HASH)?
+            .as_deref()
+            .map(|v| self.decrypt_value(v))
+            .transpose()?
+            .map(|v| String::from_utf8_lossy(&v).trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(expected_genesis_hash_from_env))
     }
 
     /// Sum of worker AI reward tranches still inside the 90-day lock window (DEX cannot spend this portion).

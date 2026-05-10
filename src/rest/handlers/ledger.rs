@@ -11,8 +11,9 @@ use std::net::SocketAddr;
 use crate::{
     attestation::AttestationReport,
     ledger::{
-        ADMIN_REST_FAUCET_MAX_AMOUNT_MICRO, AdminRestFaucetOutcome, InitialAirdropClaimOutcome,
-        MAX_SUPPLY_MICRO, MIN_WORKER_STAKE_MICRO, STEVEMON,
+        ADMIN_REST_FAUCET_MAX_AMOUNT_MICRO, AdminRestFaucetOutcome, BlockSummary,
+        InitialAirdropClaimOutcome, MAX_SUPPLY_MICRO, MIN_WORKER_STAKE_MICRO, STEVEMON,
+        TxIndexRecordV1,
     },
     protocol::{SignedTxEnvelopeV1, TxV1},
     rest::{
@@ -539,9 +540,8 @@ async fn post_transfer_enveloped_impl(
         return (StatusCode::BAD_REQUEST, "insufficient funds").into_response();
     }
 
-    {
-        let mut mp = state.mempool.lock().await;
-        mp.push(env);
+    if let Err(e) = state.enqueue_mempool_tx(env).await {
+        return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
     }
 
     (
@@ -836,11 +836,15 @@ async fn post_tx_submit_impl(
                 .await
                 .into_response()
         }
-        TxV1::EnterpriseInference { .. } => (
-            StatusCode::BAD_REQUEST,
-            "use /enterprise/inference (envelope required)",
-        )
-            .into_response(),
+        TxV1::EnterpriseInference { .. } => {
+            crate::rest::handlers::enterprise::post_enterprise_inference_submit(
+                State(state),
+                headers,
+                Json(env),
+            )
+            .await
+            .into_response()
+        }
         TxV1::VerifyZkProof { .. } => post_ledger_zk_verify(State(state), headers, Json(env))
             .await
             .into_response(),
@@ -873,6 +877,132 @@ pub async fn get_ledger_me(
     Query(q): Query<LedgerMeQuery>,
 ) -> impl IntoResponse {
     get_ledger_me_impl(State(state), Query(q)).await
+}
+
+pub async fn get_ledger_state(State(state): State<RestState>) -> impl IntoResponse {
+    #[derive(Serialize)]
+    struct R {
+        block_height: u64,
+        mempool_len: usize,
+        state_root: String,
+    }
+    let mempool_len = {
+        let mp = state.mempool.lock().await;
+        mp.len()
+    };
+    let block_height = state.ledger.block_height().unwrap_or(0);
+    let state_root = state.ledger.compute_state_root();
+    (
+        StatusCode::OK,
+        Json(R {
+            block_height,
+            mempool_len,
+            state_root,
+        }),
+    )
+        .into_response()
+}
+
+pub async fn get_ledger_blocks(State(state): State<RestState>) -> impl IntoResponse {
+    let v: Vec<BlockSummary> = state.ledger.recent_blocks(20);
+    (StatusCode::OK, Json(v)).into_response()
+}
+
+#[derive(Serialize)]
+struct LedgerBlockDetailResp {
+    block: BlockSummary,
+    txs: Vec<TxIndexRecordV1>,
+}
+
+pub async fn get_ledger_block(
+    State(state): State<RestState>,
+    Path(height): Path<u64>,
+) -> impl IntoResponse {
+    let block = match state.ledger.block_summary_by_height(height) {
+        Ok(Some(block)) => block,
+        Ok(None) => return (StatusCode::NOT_FOUND, "block not found").into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let txs = match state.ledger.txs_by_block_height(height, 500) {
+        Ok(txs) => txs,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    (StatusCode::OK, Json(LedgerBlockDetailResp { block, txs })).into_response()
+}
+
+fn decoded_zk_journal_json(journal_b64: &str) -> Option<serde_json::Value> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(journal_b64.as_bytes())
+        .ok()?;
+    if let Ok(j) = bincode::deserialize::<crate::zk_verifier::ZkCourtJournalV1>(&bytes) {
+        return Some(serde_json::json!({
+            "type": "ZkCourtJournalV1",
+            "commitment_sha256_hex": hex::encode(j.commitment_sha256),
+            "flops_u64": j.flops_u64,
+            "worker_pubkey_hex": hex::encode(j.worker_pubkey_bytes),
+        }));
+    }
+    if let Ok(j) = bincode::deserialize::<crate::zk_verifier::InferenceJournalV1>(&bytes) {
+        return Some(serde_json::json!({
+            "type": "InferenceJournalV1",
+            "prompt_hash_hex": hex::encode(j.prompt_hash),
+            "response_hash_hex": hex::encode(j.response_hash),
+            "cost_micro": j.cost_micro,
+            "worker_pubkey_hex": hex::encode(j.worker_pubkey_bytes),
+        }));
+    }
+    None
+}
+
+pub async fn get_explorer_tx(
+    State(state): State<RestState>,
+    Path(hash): Path<String>,
+) -> impl IntoResponse {
+    let Some(row) = (match state.ledger.tx_by_hash(&hash) {
+        Ok(row) => row,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }) else {
+        return (StatusCode::NOT_FOUND, "tx not found").into_response();
+    };
+
+    let (zk_journal, task) = match &row.tx.tx {
+        TxV1::VerifyZkProof {
+            task_id,
+            journal_b64,
+            ..
+        } => {
+            let task = if task_id.trim().is_empty() {
+                None
+            } else {
+                state.ledger.ai_workload_task(task_id).ok().flatten()
+            };
+            (decoded_zk_journal_json(journal_b64), task)
+        }
+        TxV1::EnterpriseInference { .. } => (
+            None,
+            state.ledger.ai_workload_task(&row.hash).ok().flatten(),
+        ),
+        _ => (None, None),
+    };
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "found": true,
+            "source": "tx_index_v1",
+            "hash": row.hash,
+            "block_height": row.block_height,
+            "tx_index": row.tx_index,
+            "tx_kind": row.tx_kind,
+            "workload_flag": row.workload_flag,
+            "signer_wallet": row.signer_wallet,
+            "indexed_at_ms": row.indexed_at_ms,
+            "tx": row.tx,
+            "zk_journal": zk_journal,
+            "task": task,
+        })),
+    )
+        .into_response()
 }
 
 pub async fn get_ledger_balance(
@@ -915,106 +1045,36 @@ pub async fn post_ledger_mine(
         return r;
     }
 
-    let txs: Vec<SignedTxEnvelopeV1> = {
-        let mut mp = state.mempool.lock().await;
-        std::mem::take(&mut *mp)
-    };
-
-    if txs.is_empty() {
-        return (
+    match crate::consensus::mine_pending_block(state).await {
+        Ok(outcome) if !outcome.mined => (
             StatusCode::OK,
             Json(serde_json::json!({"ok": true, "mined": false, "tx_count": 0 })),
         )
-            .into_response();
-    }
-
-    let mut applied_hashes: Vec<String> = Vec::new();
-    for env in &txs {
-        let tx_bytes = match verify_envelope_v1(env) {
-            Ok(b) => b,
-            Err(e) => return (StatusCode::UNAUTHORIZED, e).into_response(),
-        };
-        let tx_hash = format!("0x{}", hex::encode(sha2::Sha256::digest(&tx_bytes)));
-
-        match &env.tx {
-            TxV1::Transfer {
-                from_wallet,
-                to_wallet,
-                amount_micro,
-                fee_bps,
-            } => {
-                let att = AttestationReport {
-                    v: 1,
-                    platform: env.attestation.platform.clone(),
-                    report_b64: env.attestation.report_b64.clone(),
-                };
-                if let Err(e) = state.ledger.transfer_with_fee_attested(
-                    from_wallet,
-                    to_wallet,
-                    *amount_micro,
-                    Some(*fee_bps),
-                    Some(&att),
-                    None,
-                ) {
-                    return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
-                }
-            }
-            TxV1::VerifyZkProof {
-                image_id,
-                journal_b64,
-                receipt_b64,
-            } => {
-                // Receipt was already verified at submission time; at mining time, we record it on-ledger.
-                // (Peers will re-validate when applying BlockMined.)
-                let receipt_hash: [u8; 32] = sha2::Sha256::digest(receipt_b64.as_bytes()).into();
-                let journal_hash: [u8; 32] = sha2::Sha256::digest(journal_b64.as_bytes()).into();
-                if let Err(e) =
-                    state
-                        .ledger
-                        .record_verified_zk_receipt(*image_id, &receipt_hash, &journal_hash)
-                {
-                    return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
-                }
-            }
-            _ => return (StatusCode::BAD_REQUEST, "unsupported tx in mine").into_response(),
+            .into_response(),
+        Ok(outcome) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "mined": true,
+                "block_height": outcome.block_height,
+                "block_id": outcome.block_id,
+                "producer_id": outcome.producer_id,
+                "state_root": outcome.state_root,
+                "tx_hashes": outcome.tx_hashes,
+                "tx_count": outcome.tx_count,
+                "base_reward_micro": outcome.reward.base_reward_micro,
+                "compute_reward_micro": outcome.reward.compute_reward_micro,
+                "total_reward_micro": outcome.reward.total_reward_micro,
+            })),
+        )
+            .into_response(),
+        Err(crate::consensus::MineError::Unauthorized(e)) => {
+            (StatusCode::UNAUTHORIZED, e).into_response()
         }
-
-        applied_hashes.push(tx_hash);
-    }
-
-    // Block height is best-effort monotonic; for Phase 2 we derive from local count of mined blocks.
-    let block_height = state.ledger.bump_block_height().unwrap_or(0);
-    let block_id = format!(
-        "0x{}",
-        hex::encode(sha2::Sha256::digest(applied_hashes.join(",").as_bytes()))
-    );
-    let state_root = state.ledger.compute_state_root();
-
-    if let Some(tx) = state.gossip_tx.clone() {
-        let ev = NetworkEvent::BlockMined {
-            block_height,
-            block_id: block_id.clone(),
-            state_root: state_root.clone(),
-            txs: txs.clone(),
-        };
-        if let Ok(json) = serde_json::to_string(&ev) {
-            let _ = tx.send(json).await;
+        Err(crate::consensus::MineError::BadRequest(e)) => {
+            (StatusCode::BAD_REQUEST, e).into_response()
         }
     }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "ok": true,
-            "mined": true,
-            "block_height": block_height,
-            "block_id": block_id,
-            "state_root": state_root,
-            "tx_hashes": applied_hashes,
-            "tx_count": txs.len(),
-        })),
-    )
-        .into_response()
 }
 
 pub async fn post_ledger_zk_verify(
@@ -1028,6 +1088,7 @@ pub async fn post_ledger_zk_verify(
     };
 
     let TxV1::VerifyZkProof {
+        task_id,
         image_id,
         journal_b64,
         receipt_b64,
@@ -1041,30 +1102,51 @@ pub async fn post_ledger_zk_verify(
         return (StatusCode::BAD_REQUEST, "image_id mismatch").into_response();
     }
 
-    // Cryptographic verification (or dev mock, see zk_verifier).
-    match crate::zk_verifier::verify_receipt_with_size(&receipt_b64) {
-        Ok((true, _sz)) => {}
-        Ok((false, _sz)) => {
-            return (StatusCode::BAD_REQUEST, "receipt verification failed").into_response();
-        }
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!("receipt verify error: {e}"),
-            )
-                .into_response();
+    if !task_id.trim().is_empty() {
+        match state.ledger.ai_workload_task(&task_id) {
+            Ok(Some(task)) if task.processed => {
+                return (
+                    StatusCode::CONFLICT,
+                    format!("task already processed: {}", task_id.trim()),
+                )
+                    .into_response();
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("unknown task_id: {}", task_id.trim()),
+                )
+                    .into_response();
+            }
+            Err(e) => return (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response(),
         }
     }
 
-    // Best-effort: ensure the supplied journal bytes parse as InferenceJournalV1 (even in mock mode).
-    if let Ok(j_bytes) = base64::engine::general_purpose::STANDARD.decode(journal_b64.as_bytes()) {
-        let _ = bincode::deserialize::<crate::zk_verifier::InferenceJournalV1>(&j_bytes);
+    if let Err(e) =
+        crate::zk_verifier::verify_tx_receipt_and_journal(image_id, &journal_b64, &receipt_b64)
+    {
+        let worker = env.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase();
+        let slashed = state
+            .ledger
+            .slash_worker_bond_to_ecosystem_all(&worker)
+            .unwrap_or(0);
+        log::error!(
+            "[zk-slash] invalid receipt submission worker={} slashed_micro={} err={}",
+            worker,
+            slashed,
+            e
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("receipt verify error: {e}; worker bond slashed_micro={slashed}"),
+        )
+            .into_response();
     }
 
     // Enqueue into mempool (Phase 2: pending until mined).
-    {
-        let mut mp = state.mempool.lock().await;
-        mp.push(env);
+    if let Err(e) = state.enqueue_mempool_tx(env).await {
+        return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
     }
 
     (
