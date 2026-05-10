@@ -380,6 +380,7 @@ async fn post_ai_utility_impl(
             target_worker_id: tid.clone(),
             sender_id: sender_id.clone(),
             encrypted_prompt_b64: base64::engine::general_purpose::STANDARD.encode(box_bytes),
+            model: crate::executor::configured_default_model(),
             max_fee_micro,
         };
         let bytes = match serde_json::to_vec(&req2) {
@@ -566,8 +567,8 @@ async fn post_ai_utility_impl(
         return r;
     }
 
-    let out = match crate::rest::helpers::ollama_generate("llama3", prompt_trim).await {
-        Ok(t) => t,
+    let out = match crate::worker_engine::run_local_inference(prompt_trim, "").await {
+        Ok(metrics) => metrics.text,
         Err(e) => {
             // Graceful fallback: never crash if Ollama isn't installed/running.
             let msg = e.to_string();
@@ -719,7 +720,7 @@ pub async fn post_ai_infer(
         };
         let worker_id = hex::encode(worker_pk.to_bytes());
 
-        let metrics = match crate::worker_engine::run_local_inference(prompt.trim()).await {
+        let metrics = match crate::worker_engine::run_local_inference(prompt.trim(), "").await {
             Ok(v) => v,
             Err(e) => {
                 let msg = e.to_string();

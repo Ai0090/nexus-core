@@ -11,7 +11,7 @@ use crate::{
     protocol::{SignedTxEnvelopeV1, TxV1},
     rest::{
         RestState,
-        helpers::{ollama_generate, std_lock, verify_envelope_v1},
+        helpers::{std_lock, verify_envelope_v1},
     },
 };
 
@@ -170,15 +170,22 @@ pub async fn post_enterprise_inference(
             .into_response();
     }
 
-    // Execute inference via Ollama (async HTTP).
-    let requested_model = model.trim();
-    let want_model = if requested_model.is_empty() {
-        "llama3"
-    } else {
-        requested_model
+    // Execute inference through the unified executor boundary.
+    let want_model = match crate::executor::resolve_model_name(model.trim()) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "MODEL_UNAVAILABLE",
+                    "message": e.to_string(),
+                })),
+            )
+                .into_response();
+        }
     };
-    let out = match ollama_generate(want_model, &prompt_txt).await {
-        Ok(t) => t,
+    let out = match crate::worker_engine::run_local_inference(&prompt_txt, &want_model).await {
+        Ok(metrics) => metrics.text,
         Err(e) => {
             // Graceful fallback: never crash if Ollama isn't installed/running.
             let msg = e.to_string();

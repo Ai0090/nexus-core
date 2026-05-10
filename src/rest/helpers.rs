@@ -6,9 +6,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::{Mutex as StdMutex, MutexGuard};
-use std::time::Duration;
 
 use super::RestState;
 
@@ -18,52 +16,6 @@ pub fn ollama_url_base() -> String {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "http://127.0.0.1:11434".into())
-}
-
-pub fn ollama_timeout() -> Duration {
-    let sec = std::env::var("TET_OLLAMA_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|&s| s > 0 && s <= 3600)
-        .unwrap_or(120);
-    Duration::from_secs(sec)
-}
-
-pub async fn ollama_generate(model: &str, prompt: &str) -> Result<String, String> {
-    #[derive(Serialize)]
-    struct Req<'a> {
-        model: &'a str,
-        prompt: &'a str,
-        stream: bool,
-    }
-    #[derive(Deserialize)]
-    struct Resp {
-        #[serde(default)]
-        response: String,
-    }
-    let base = ollama_url_base();
-    let url = format!("{}/api/generate", base.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(ollama_timeout())
-        .build()
-        .map_err(|e| e.to_string())?;
-    let r = client
-        .post(url)
-        .json(&Req {
-            model,
-            prompt,
-            stream: false,
-        })
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let status = r.status();
-    let body = r.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(format!("ollama HTTP {}: {}", status.as_u16(), body.trim()));
-    }
-    let v: Resp = serde_json::from_str(&body).map_err(|e| e.to_string())?;
-    Ok(v.response)
 }
 
 /// Poisoned mutex recovery: never panic the HTTP server on `lock()` poison.

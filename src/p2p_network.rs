@@ -298,6 +298,9 @@ pub struct InferenceRequest {
     pub target_worker_id: String,
     pub sender_id: String,
     pub encrypted_prompt_b64: String,
+    /// Optional model selector propagated from signed L1 demand / client request.
+    #[serde(default)]
+    pub model: Option<String>,
     /// Client-authorized upper bound for this job (Stevemon). Older payloads omit this → deserialize default [`AI_INFER_MICROPAYMENT_MICRO`].
     #[serde(default = "default_inference_max_fee_micro")]
     pub max_fee_micro: u64,
@@ -880,7 +883,8 @@ pub async fn run_swarm_loop(
                                     log::info!("[p2p][e2ee] True X25519 decryption successful!");
                                     log::info!("[p2p][trace] Spawned task, calling Ollama...");
 
-                                    let metrics = match crate::worker_engine::run_local_inference(prompt.trim()).await {
+                                    let requested_model = req.model.as_deref().unwrap_or_default();
+                                    let metrics = match crate::worker_engine::run_local_inference(prompt.trim(), requested_model).await {
                                         Ok(v) => v,
                                         Err(e) => {
                                             log::error!("[p2p][worker] inference failed sender={} err={e}", req.sender_id);
@@ -1377,7 +1381,11 @@ pub fn start_p2p_node(
     }
 
     // Semantic routing: advertise model capability in the DHT.
-    let k: &[u8] = b"model:llama3-8b";
+    let model_record = format!(
+        "model:{}",
+        crate::executor::configured_default_model().unwrap_or_else(|| "unconfigured".into())
+    );
+    let k = model_record.as_bytes();
     let key = libp2p::kad::RecordKey::new(&k);
     if let Err(e) = swarm.behaviour_mut().kademlia.start_providing(key) {
         log::error!("[p2p][kad] start_providing failed: {e}");

@@ -1,33 +1,13 @@
 //! Local worker execution engine (Phase 1).
 //!
-//! Real inference via a local Ollama instance and Stevemon / FLOPs accounting.
+//! Real inference via the unified executor boundary and Stevemon / FLOPs accounting.
 
 use crate::ai_filter::{ContentFilter as _, FilterStage};
-use anyhow::{Context as _, anyhow};
+use crate::executor::InferenceExecutor as _;
+use anyhow::anyhow;
 use base64::Engine as _;
 use nexus_protocol::InferenceJournalV1;
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use tokio::task;
-
-const OLLAMA_GENERATE_URL: &str = "http://127.0.0.1:11434/api/generate";
-
-#[derive(Debug, Serialize)]
-struct OllamaGenerateReq<'a> {
-    model: &'a str,
-    prompt: &'a str,
-    stream: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct OllamaGenerateResp {
-    response: Option<String>,
-    /// Output-side token evaluations (Ollama).
-    eval_count: Option<u64>,
-    /// Prompt-side token evaluations when exposed by the runtime (`show_details` / newer API).
-    prompt_eval_count: Option<u64>,
-    eval_duration: Option<u64>, // nanoseconds
-}
 
 /// Metrics returned after a successful local inference run.
 #[derive(Debug, Clone)]
@@ -53,12 +33,14 @@ fn env_u128(name: &str, default: u128) -> u128 {
         .max(1)
 }
 
-/// Run a real local inference via Ollama. Computes FLOPs from tokenizer-accurate token counts when available.
-pub async fn run_local_inference(prompt: &str) -> anyhow::Result<LocalInferenceMetrics> {
+/// Run a real local inference via the configured executor.
+pub async fn run_local_inference(prompt: &str, model: &str) -> anyhow::Result<LocalInferenceMetrics> {
     let p = prompt.trim();
     if p.is_empty() {
         return Err(anyhow!("prompt required"));
     }
+    let model = crate::executor::resolve_model_name(model)
+        .map_err(|e| anyhow!("model unavailable: {e}"))?;
 
     // Phase 4.1: Node Operator Defense (SAFE MODE content filtering).
     if crate::worker_config::safe_mode() {
@@ -75,30 +57,16 @@ pub async fn run_local_inference(prompt: &str) -> anyhow::Result<LocalInferenceM
         }
     }
 
-    let client = Client::new();
-    let body = OllamaGenerateReq {
-        model: "llama3",
-        prompt: p,
-        stream: false,
-    };
-
-    let resp = match client.post(OLLAMA_GENERATE_URL).json(&body).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("[ollama] POST failed url={} err={e:?}", OLLAMA_GENERATE_URL);
-            return Err(anyhow!("ollama POST failed: {e}"));
-        }
-    };
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        log::error!("[ollama] non-200 status={status} body={text}");
-        return Err(anyhow!("ollama error: status={status} body={text}"));
-    }
-
-    let out: OllamaGenerateResp = resp.json().await.context("ollama JSON decode failed")?;
-    let text = out.response.unwrap_or_default().trim().to_string();
+    let exec = crate::executor::default_executor();
+    let out = exec
+        .run(crate::executor::InferenceRequest {
+            prompt: p,
+            model: &model,
+            max_new_tokens: None,
+        })
+        .await
+        .map_err(|e| anyhow!("{} executor failed for model={}: {e}", exec.name(), model))?;
+    let text = out.text.trim().to_string();
 
     if crate::worker_config::safe_mode() {
         let f = crate::ai_filter::default_filter();
@@ -114,12 +82,8 @@ pub async fn run_local_inference(prompt: &str) -> anyhow::Result<LocalInferenceM
         }
     }
 
-    let completion_tokens = out.eval_count.unwrap_or(0);
-    let prompt_tokens = out.prompt_eval_count.unwrap_or_else(|| {
-        // Rough tokenizer fallback when the runtime omits prompt_eval_count (still deterministic per prompt).
-        let est = (p.len().saturating_add(3)) / 4;
-        est.max(1) as u64
-    });
+    let completion_tokens = out.telemetry.completion_tokens;
+    let prompt_tokens = out.telemetry.prompt_tokens;
 
     let difficulty = env_u128("TET_MODEL_DIFFICULTY_FLOPS_PER_TOKEN", 1_000_000);
     let tok_sum = (prompt_tokens as u128).saturating_add(completion_tokens as u128);

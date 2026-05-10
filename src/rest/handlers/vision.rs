@@ -131,17 +131,6 @@ pub async fn get_vision_caac_worker(
         .into_response()
 }
 
-pub async fn get_vision_oracle_zk_court_alerts() -> impl IntoResponse {
-    let alerts = crate::vision::zk_court::list_zk_court_logs();
-    (
-        StatusCode::OK,
-        Json(json!({
-            "alerts": alerts,
-        })),
-    )
-        .into_response()
-}
-
 #[derive(Debug, Deserialize)]
 pub struct OptimisticVerifyReq {
     pub worker_id: String,

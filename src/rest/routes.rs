@@ -410,10 +410,6 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
             axum::routing::get(super::handlers::vision::get_vision_caac_worker),
         )
         .route(
-            "/v1/vision/oracle/zk-court-alerts",
-            axum::routing::get(super::handlers::vision::get_vision_oracle_zk_court_alerts),
-        )
-        .route(
             "/v1/vision/zk-court/verify-optimistic",
             axum::routing::post(super::handlers::vision::post_vision_zk_court_verify_optimistic),
         )

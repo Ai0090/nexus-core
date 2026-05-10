@@ -5,7 +5,7 @@
 //! 2. **Heavy local inference** — Candle quantized Llama 3 8B instruct GGUF via `worker_ai::run_local_inference`.
 //!    Downloads the model on first run. Prints a severe warning if free RAM < 8GB, but proceeds.
 //! 3. **Ollama** fallback — `POST` to `TET_OLLAMA_URL` (default `http://127.0.0.1:11434/api/generate`), model from
-//!    `TET_OLLAMA_MODEL` (default `llama3`), timeout `TET_OLLAMA_TIMEOUT_SECS` (default 120).
+//!    `TET_DEFAULT_MODEL` / `TET_OLLAMA_MODEL`, timeout `TET_OLLAMA_TIMEOUT_SECS` (default 120).
 //! 4. Deterministic `tet_worker::poc_infer` only if everything else fails (last resort).
 
 use crate::ai_filter::{ContentFilter as _, FilterStage};
@@ -64,12 +64,8 @@ fn ollama_url() -> String {
         .unwrap_or_else(|| "http://127.0.0.1:11434/api/generate".into())
 }
 
-fn ollama_model_name() -> String {
-    std::env::var("TET_OLLAMA_MODEL")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "llama3".into())
+fn ollama_model_name() -> Option<String> {
+    crate::executor::configured_default_model()
 }
 
 fn ollama_timeout() -> Duration {
@@ -84,7 +80,9 @@ fn ollama_timeout() -> Duration {
 /// Returns generated text, or error (connection / HTTP / JSON).
 fn try_ollama_generate(prompt: &str) -> Result<String, String> {
     let url = ollama_url();
-    let model = ollama_model_name();
+    let model = ollama_model_name().ok_or_else(|| {
+        "TET_DEFAULT_MODEL or TET_OLLAMA_MODEL must be set for Ollama fallback".to_string()
+    })?;
     let body = serde_json::json!({
         "model": model,
         "prompt": prompt,
@@ -111,7 +109,7 @@ fn try_ollama_generate(prompt: &str) -> Result<String, String> {
 
 fn ollama_or_poc(model: &str, input: &str) -> (String, String) {
     match try_ollama_generate(input) {
-        Ok(t) => (t, ollama_model_name()),
+        Ok(t) => (t, ollama_model_name().unwrap_or_else(|| model.to_string())),
         Err(_) => {
             eprintln!("[Worker] Ollama not found. Falling back to PoC simulation.");
             (crate::tet_worker::poc_infer(input), model.to_string())

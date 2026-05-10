@@ -148,7 +148,7 @@ fn verify_zk_task_id(env: &SignedTxEnvelopeV1) -> Option<&str> {
 }
 
 async fn run_inference_for_task(task: &AiWorkloadTask) -> anyhow::Result<InferenceRun> {
-    let metrics = crate::worker_engine::run_local_inference(&task.prompt)
+    let metrics = crate::worker_engine::run_local_inference(&task.prompt, &task.model)
         .await
         .map_err(|e| {
             anyhow::anyhow!(

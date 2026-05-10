@@ -1,7 +1,7 @@
-//! Minimal local P2P "nervous system" (mDNS discovery + Ping liveness).
+//! Local P2P "nervous system" (mDNS discovery, liveness, gossipsub, and block-sync RPC).
 //!
-//! Scope: establish that multiple nodes on the same LAN can discover and connect to each other.
-//! No consensus, no application protocol.
+//! Scope: establish that multiple nodes can discover peers, exchange signed transaction/block
+//! messages, and maintain lightweight sync/backfill channels around the ledger.
 
 use futures::StreamExt;
 use libp2p::core::transport::Transport as _;
